@@ -7,17 +7,26 @@ import { BreadcrumbProvider, useBreadcrumbs } from "../context/BreadcrumbContext
 import { BreadcrumbBar } from "./BreadcrumbBar";
 
 vi.mock("@/lib/router", () => ({
-  Link: ({ children, to }: { children: ReactNode; to: string }) => (
-    <a href={to}>{children}</a>
+  Link: ({ children, className, to }: { children: ReactNode; className?: string; to: string }) => (
+    <a className={className} href={to}>{children}</a>
   ),
 }));
 
 vi.mock("../context/SidebarContext", () => ({
-  useSidebar: () => ({ isMobile: false, toggleSidebar: vi.fn() }),
+  useSidebar: () => ({
+    collapsed: false,
+    isMobile: false,
+    toggleCollapsed: vi.fn(),
+    toggleSidebar: vi.fn(),
+  }),
 }));
 
 vi.mock("../context/CompanyContext", () => ({
-  useCompany: () => ({ selectedCompanyId: "company-1", selectedCompany: { issuePrefix: "PAP" } }),
+  useCompany: () => ({ selectedCompanyId: "company-1", selectedCompany: { issuePrefix: "TES" } }),
+}));
+
+vi.mock("../context/PanelContext", () => ({
+  usePanel: () => ({ panelVisible: true, togglePanelVisible: vi.fn() }),
 }));
 
 vi.mock("@/plugins/slots", () => ({
@@ -30,24 +39,41 @@ vi.mock("@/plugins/launchers", () => ({
   PluginLauncherOutlet: () => null,
 }));
 
-function TaskBreadcrumbs({ onOpen }: { onOpen: () => void }) {
+function TaskBreadcrumbs({
+  onOpen,
+  taskDetailLayout = false,
+  identifier = "PAP-16679",
+}: {
+  onOpen?: () => void;
+  taskDetailLayout?: boolean;
+  identifier?: string;
+}) {
   const { setBreadcrumbs, setBreadcrumbToolbar } = useBreadcrumbs();
 
   useEffect(() => {
     setBreadcrumbs([
-      { label: "Tasks", href: "/tasks" },
-      { label: "Keep the panel launcher available", identifier: "PAP-16679" },
+      { label: "Tasks", href: "/issues" },
+      {
+        label: "Hire your first engineer and create a hiring plan",
+        identifier,
+        leading: "status",
+      },
     ]);
     setBreadcrumbToolbar(
-      <button type="button" aria-label="Show task side panel" onClick={onOpen}>
-        Show panel
-      </button>,
+      onOpen ? (
+        <button type="button" aria-label="Show task side panel" onClick={onOpen}>
+          Show panel
+        </button>
+      ) : null,
     );
     return () => setBreadcrumbToolbar(null);
-  }, [onOpen, setBreadcrumbToolbar, setBreadcrumbs]);
+  }, [identifier, onOpen, setBreadcrumbToolbar, setBreadcrumbs]);
 
-  return <BreadcrumbBar />;
+  return <BreadcrumbBar taskDetailLayout={taskDetailLayout} />;
 }
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe("BreadcrumbBar", () => {
   let container: HTMLDivElement;
@@ -82,5 +108,25 @@ describe("BreadcrumbBar", () => {
 
     act(() => launcher?.click());
     expect(onOpen).toHaveBeenCalledOnce();
+  });
+
+  it("appends the task identifier to the task title in the task-detail header", async () => {
+    await act(async () => {
+      root.render(
+        <BreadcrumbProvider>
+          <TaskBreadcrumbs taskDetailLayout identifier="TES-1" />
+        </BreadcrumbProvider>,
+      );
+    });
+
+    const identifier = container.querySelector('[data-slot="task-title-identifier"]');
+    expect(identifier).toBeTruthy();
+    expect(identifier?.className).not.toContain("absolute");
+
+    const title = Array.from(container.querySelectorAll("span"))
+      .find((element) => element.textContent === "Hire your first engineer and create a hiring plan");
+    expect(title?.className).toContain("truncate");
+    expect(title?.nextElementSibling).toBe(identifier);
+    expect(identifier?.textContent).toBe("TES-1");
   });
 });

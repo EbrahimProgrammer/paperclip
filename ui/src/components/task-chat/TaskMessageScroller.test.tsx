@@ -160,6 +160,13 @@ describe("TaskMessageScroller", () => {
     expect(el.getAttribute("data-scroll-active")).toBeNull();
   });
 
+  it("contains horizontal overflow so no scrollbar appears above the composer", () => {
+    render();
+
+    expect(scroller().classList).toContain("overflow-x-hidden");
+    expect(scroller().classList).toContain("overflow-y-auto");
+  });
+
   it("auto-follows content instantly while pinned", async () => {
     render(1);
     const el = scroller();

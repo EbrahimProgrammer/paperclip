@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { cn } from "@/lib/utils";
+import { useStreamlinedTaskChatPresentation } from "./presentation-mode";
 import {
   DRAFT_DEBOUNCE_MS,
   clearDraft,
@@ -269,8 +270,8 @@ function escapeMarkdownLabel(name: string): string {
  * Composer for the redesigned thread (v7 spec): the shared MarkdownEditor
  * (rich lists, @-mentions, /-commands, inline pasted images) over a 32px
  * comp-bar of [attach] [mode chip] … [assignee] [send]. The mode chip is a
- * status-chip rectangle carrying the pending mode's hue; the composer chrome
- * itself stays neutral. Shift+Tab cycles modes (captured before Lexical);
+ * borderless filled control carrying the pending mode's hue; the composer
+ * chrome itself stays neutral. Shift+Tab cycles modes (captured before Lexical);
  * Cmd/Ctrl+Enter posts via the editor's native onSubmit; plain Enter stays a
  * newline / next list item. Pasted or dropped images upload through
  * `onAttachImage` (or the `onImageUpload` fallback) and land inline at the
@@ -302,6 +303,7 @@ export function TaskChatComposer({
   takeover = null,
   pendingTakeover = null,
 }: TaskChatComposerProps) {
+  const streamlined = useStreamlinedTaskChatPresentation();
   const [body, setBody] = useState(() => (draftKey ? loadDraft(draftKey) : ""));
   const [submitting, setSubmitting] = useState(false);
   const [takeoverBusy, setTakeoverBusy] = useState(false);
@@ -677,7 +679,9 @@ export function TaskChatComposer({
   return (
     <div
       className={cn(
-        "paperclip-task-chat-composer rounded-xl bg-card p-(--sz-18px)",
+        streamlined
+          ? "paperclip-task-chat-composer rounded-(--radius-task-composer) bg-muted p-(--sz-18px) shadow-(--shadow-task-composer) transition-shadow focus-within:ring-2 focus-within:ring-ring/15"
+          : "paperclip-task-chat-composer rounded-xl bg-card p-(--sz-18px)",
       )}
       onKeyDownCapture={(e) => {
         // Shift+Tab cycles the pending mode; captured on the wrapper so it
@@ -911,8 +915,13 @@ export function TaskChatComposer({
                   <button
                     type="button"
                     disabled={disabled || !onWorkModeChange}
-                    className="status-chip flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition hover:brightness-110 focus-visible:brightness-110 focus-visible:outline-none disabled:opacity-50"
-                    style={{ "--sc": modeHue(pendingMode) } as CSSProperties}
+                    className={cn(
+                      "flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium disabled:opacity-50",
+                      streamlined
+                        ? "bg-foreground/15 text-foreground transition-colors hover:bg-foreground/20"
+                        : "status-chip transition hover:brightness-110 focus-visible:brightness-110 focus-visible:outline-none",
+                    )}
+                    style={!streamlined ? { "--sc": modeHue(pendingMode) } as CSSProperties : undefined}
                     data-testid="task-chat-composer-mode"
                     data-pending-work-mode={pendingMode}
                   >
@@ -1045,7 +1054,12 @@ export function TaskChatComposer({
                     : "Save queued message"
                   : "Send"
               }
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground transition-transform hover:scale-105 disabled:scale-100 disabled:bg-muted disabled:text-muted-foreground"
+              className={cn(
+                "flex h-8 w-8 shrink-0 items-center justify-center transition-transform hover:scale-105 disabled:scale-100",
+                streamlined
+                  ? "rounded-full bg-foreground text-background disabled:bg-foreground disabled:text-background disabled:opacity-100"
+                  : "rounded-md bg-primary text-primary-foreground disabled:bg-muted disabled:text-muted-foreground",
+              )}
               data-testid="task-chat-composer-send"
             >
               {submitting ? (

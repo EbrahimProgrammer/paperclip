@@ -75,6 +75,7 @@ export interface TaskSidePanelProps {
   issue: Issue;
   accountScope: string;
   childIssues?: Issue[];
+  issueLinkState?: unknown;
   onAddSubIssue?: () => void;
   onUpdate: (data: Record<string, unknown>) => void;
   inline?: boolean;
@@ -190,6 +191,7 @@ export function TaskSidePanel({
   issue,
   accountScope,
   childIssues = [],
+  issueLinkState,
   onAddSubIssue,
   onUpdate,
   inline = false,
@@ -514,6 +516,7 @@ export function TaskSidePanel({
       <IssueProperties
         issue={issue}
         childIssues={childIssues}
+        issueLinkState={issueLinkState}
         onAddSubIssue={onAddSubIssue}
         onUpdate={onUpdate}
         inline={inline}

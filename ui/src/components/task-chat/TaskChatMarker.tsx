@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { useStreamlinedTaskChatPresentation } from "./presentation-mode";
 import { CircleDot, OctagonX, Flag } from "lucide-react";
 import type { TaskChatMarkerItem } from "./task-chat-model";
 import { Button } from "@/components/ui/button";
@@ -23,6 +24,7 @@ export function TaskChatMarker({
   onTryAgain?: () => Promise<void> | void;
   tryAgainPending?: boolean;
 }) {
+  const streamlined = useStreamlinedTaskChatPresentation();
   const Icon = VARIANT_ICON[item.variant];
   const interrupted = item.variant === "interrupted";
   const handleTryAgain = () => {
@@ -32,7 +34,11 @@ export function TaskChatMarker({
       .catch(() => undefined);
   };
   return (
-    <div className="tc-enter-marker flex items-center gap-2 py-1 text-xs text-muted-foreground">
+    <div
+      className="tc-enter-marker flex items-center gap-2 py-1 text-xs text-muted-foreground"
+      role={streamlined ? "separator" : undefined}
+      aria-label={streamlined ? item.label : undefined}
+    >
       <span className={cn("h-px flex-1", interrupted ? "border-t border-dashed border-destructive/50" : "bg-border")} />
       <span className={cn("flex items-center gap-1.5", interrupted && "text-destructive")}>
         <Icon className="h-3.5 w-3.5" />
