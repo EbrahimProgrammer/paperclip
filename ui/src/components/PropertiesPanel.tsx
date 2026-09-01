@@ -380,6 +380,7 @@ function ResizablePropertiesPanel({
             presentation="docked"
             maximized={maximized}
             contentMode="full-bleed"
+            headerSize={taskDetailLayout ? "task-detail" : "default"}
             className="flex-1 border-l-0"
             header={(
               <div
@@ -390,6 +391,7 @@ function ResizablePropertiesPanel({
             trailingControls={(
               <SidePanelWindowControls
                 maximized={maximized}
+                closeControl={taskDetailLayout ? "close" : "toggle"}
                 onMaximizedChange={(next) => {
                   if (next) handleMaximize();
                   else handleRestore();

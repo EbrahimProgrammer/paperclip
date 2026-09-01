@@ -91,6 +91,13 @@ describe("SidebarNavItem", () => {
     expect(classTokens(alertBadge)).not.toContain("shadow-(--shadow-extract-12)");
   });
 
+  it("omits the icon slot when an item has no icon", () => {
+    render(<SidebarNavItem to="/issues/one" label="Recent task" />);
+
+    expect(link().querySelector('[data-slot="sidebar-nav-icon"]')).toBeNull();
+    expect(link().firstElementChild?.textContent).toBe("Recent task");
+  });
+
   it("uses the Paper nav surface for the active item", () => {
     render(<SidebarNavItem to="/issues" label="Tasks" icon={Inbox} active />);
 

@@ -67,6 +67,38 @@ describe("side-panel shell controls", () => {
     expect(onWindowToggle).toHaveBeenCalledOnce();
   });
 
+  it("offers an explicit X close control for the task-detail sidebar", async () => {
+    const onToggle = vi.fn();
+    await act(async () => root.render(
+      <TooltipProvider>
+        <SidePanelWindowControls
+          maximized={false}
+          onMaximizedChange={vi.fn()}
+          onToggle={onToggle}
+          closeControl="close"
+        />
+      </TooltipProvider>,
+    ));
+
+    const closeButton = container.querySelector<HTMLButtonElement>('[aria-label="Close side panel"]');
+    expect(closeButton).not.toBeNull();
+    expect(closeButton?.querySelector(".lucide-x")).not.toBeNull();
+    expect(container.querySelector('[aria-label="Toggle side panel"]')).toBeNull();
+    await act(async () => closeButton?.click());
+    expect(onToggle).toHaveBeenCalledOnce();
+  });
+
+  it("supports the task-detail header height without changing the shared default", async () => {
+    await act(async () => root.render(
+      <SidePanelFrame header={<div>Tabs</div>} headerSize="task-detail">
+        Body
+      </SidePanelFrame>,
+    ));
+    expect(container.querySelector("header")?.className).toContain("h-(--sz-60px)");
+    expect(container.querySelector("header")?.className).toContain("border-b");
+    expect(container.querySelector("header")?.className).not.toContain("h-(--side-panel-header-height)");
+  });
+
   it("keeps the prose scrollbar on the full-width viewport while centering its content", async () => {
     await act(async () => root.render(
       <SidePanelFrame contentMode="prose">Document body</SidePanelFrame>,

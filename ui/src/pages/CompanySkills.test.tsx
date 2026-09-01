@@ -472,6 +472,29 @@ describe("DiscoveryGrid IA presentation", () => {
     expect(props.onCreateFolder).not.toHaveBeenCalled();
   });
 
+  it("removes category and folder browse rails while keeping search available", async () => {
+    const node = await renderDiscoveryGrid({
+      ...projectFolderGridProps(),
+      categories: [{ slug: "design", count: 1 }],
+      categoryTotal: 1,
+      showBrowseRails: false,
+    });
+
+    expect(node.querySelector('nav[aria-label="Skill folders"]')).toBeNull();
+    expect(node.querySelector("aside")).toBeNull();
+    expect(node.textContent).not.toContain("Browse by category");
+    expect(node.querySelector('input[aria-label="Search installed skills"]')).not.toBeNull();
+  });
+
+  it("omits bulk selection when its entry point is not supplied", async () => {
+    const node = await renderDiscoveryGrid({
+      ...projectFolderGridProps(),
+      onToggleSelectMode: undefined,
+    });
+
+    expect(buttonsNamed(node, "Select")).toHaveLength(0);
+  });
+
   it("keeps folder creation available when no folder rail exists", async () => {
     const onCreateFolder = vi.fn();
     const node = await renderDiscoveryGrid({

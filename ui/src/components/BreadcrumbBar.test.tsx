@@ -41,14 +41,20 @@ vi.mock("@/plugins/launchers", () => ({
 
 function TaskBreadcrumbs({
   onOpen,
+  panelControl,
   taskDetailLayout = false,
   identifier = "PAP-16679",
 }: {
   onOpen?: () => void;
+  panelControl?: { open: boolean; onToggle: () => void };
   taskDetailLayout?: boolean;
   identifier?: string;
 }) {
-  const { setBreadcrumbs, setBreadcrumbToolbar } = useBreadcrumbs();
+  const {
+    setBreadcrumbs,
+    setBreadcrumbToolbar,
+    setBreadcrumbPanelControl,
+  } = useBreadcrumbs();
 
   useEffect(() => {
     setBreadcrumbs([
@@ -66,8 +72,19 @@ function TaskBreadcrumbs({
         </button>
       ) : null,
     );
-    return () => setBreadcrumbToolbar(null);
-  }, [identifier, onOpen, setBreadcrumbToolbar, setBreadcrumbs]);
+    setBreadcrumbPanelControl(panelControl ?? null);
+    return () => {
+      setBreadcrumbToolbar(null);
+      setBreadcrumbPanelControl(null);
+    };
+  }, [
+    identifier,
+    onOpen,
+    panelControl,
+    setBreadcrumbPanelControl,
+    setBreadcrumbToolbar,
+    setBreadcrumbs,
+  ]);
 
   return <BreadcrumbBar taskDetailLayout={taskDetailLayout} />;
 }
@@ -128,5 +145,48 @@ describe("BreadcrumbBar", () => {
     expect(title?.className).toContain("truncate");
     expect(title?.nextElementSibling).toBe(identifier);
     expect(identifier?.textContent).toBe("TES-1");
+  });
+
+  it("routes the single task-detail panel button through a page override", async () => {
+    const onToggle = vi.fn();
+    const panelControl = { open: false, onToggle };
+    await act(async () => {
+      root.render(
+        <BreadcrumbProvider>
+          <TaskBreadcrumbs taskDetailLayout panelControl={panelControl} />
+        </BreadcrumbProvider>,
+      );
+    });
+
+    const launcher = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Show properties"]',
+    );
+    expect(launcher).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Hide properties"]')).toBeNull();
+
+    act(() => launcher?.click());
+    expect(onToggle).toHaveBeenCalledOnce();
+  });
+
+  it("uses the same compact rounded hover surface for both sidebar controls", async () => {
+    await act(async () => {
+      root.render(
+        <BreadcrumbProvider>
+          <TaskBreadcrumbs taskDetailLayout />
+        </BreadcrumbProvider>,
+      );
+    });
+
+    const leftControl = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Collapse sidebar"]',
+    );
+    const rightControl = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Hide properties"]',
+    );
+
+    expect(leftControl?.className).toContain("size-9");
+    expect(rightControl?.className).toContain("size-9");
+    expect(rightControl?.className).not.toContain("rounded-none");
+    expect(rightControl?.className).not.toContain("h-full");
   });
 });

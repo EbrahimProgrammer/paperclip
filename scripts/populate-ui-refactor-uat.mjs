@@ -42,6 +42,26 @@ async function createTask(companyId, projectId, key, input) {
   });
 }
 
+async function ensureDocument(issueId, key, input) {
+  const existing = await request(`/issues/${issueId}/documents`);
+  const found = existing.find((document) => document.key === key);
+  if (found) return found;
+  return request(`/issues/${issueId}/documents/${encodeURIComponent(key)}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+async function ensureWorkProduct(issueId, externalId, input) {
+  const existing = await request(`/issues/${issueId}/work-products`);
+  const found = existing.find((workProduct) => workProduct.externalId === externalId);
+  if (found) return found;
+  return request(`/issues/${issueId}/work-products`, {
+    method: "POST",
+    body: JSON.stringify({ externalId, ...input }),
+  });
+}
+
 const companies = await request("/companies");
 const company = companies.find((candidate) => candidate.issuePrefix === companyPrefix);
 if (!company) {
@@ -180,12 +200,42 @@ for (const child of [
   }));
 }
 
+const reviewNotes = await ensureDocument(parent.id, "uat-review-notes", {
+  title: "UAT review notes",
+  format: "markdown",
+  body: [
+    "# UAT review notes",
+    "",
+    "Use this synthetic document to verify document tabs, truncation, close controls, and tab persistence.",
+    "",
+    "- Compare Properties, Subtasks, Artifacts, and this document tab.",
+    "- Resize the sidebar and confirm tab labels degrade gracefully.",
+  ].join("\n"),
+  changeSummary: "Seeded for Streamlined UI acceptance testing.",
+});
+
+const reviewArtifact = await ensureWorkProduct(
+  parent.id,
+  "ui-refactor-uat:review-artifact",
+  {
+    projectId: project.id,
+    type: "artifact",
+    provider: "custom",
+    title: "Streamlined UI review artifact",
+    status: "ready_for_review",
+    reviewState: "needs_board_review",
+    summary: "Synthetic artifact used to exercise the task sidebar's Artifacts tab during UAT.",
+  },
+);
+
 const summary = {
   company: company.name,
   project: project.name,
   projectId: project.id,
   projectUrl: `/${company.issuePrefix}/projects/${project.urlKey}/issues`,
   seededTaskCount: tasks.length,
+  seededDocument: { key: reviewNotes.key, title: reviewNotes.title },
+  seededArtifact: { id: reviewArtifact.id, title: reviewArtifact.title },
   tasks: tasks.map(({ identifier, title, status, priority }) => ({ identifier, title, status, priority })),
 };
 

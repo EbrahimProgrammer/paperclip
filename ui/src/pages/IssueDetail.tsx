@@ -2627,8 +2627,12 @@ export function IssueDetail() {
     : undefined;
   const { openNewIssue } = useDialogActions();
   const { openPanel, closePanel, panelVisible, setPanelVisible } = usePanel();
-  const { setBreadcrumbs, setBreadcrumbToolbar, setMobileToolbar } =
-    useBreadcrumbs();
+  const {
+    setBreadcrumbs,
+    setBreadcrumbToolbar,
+    setBreadcrumbPanelControl,
+    setMobileToolbar,
+  } = useBreadcrumbs();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const navigationType = useNavigationType();
@@ -3193,6 +3197,13 @@ export function IssueDetail() {
     }
     setPanelVisible(true);
   }, [issue?.id, setPanelVisible, suppressPanelUntilPlan]);
+  const toggleTaskSidePanel = useCallback(() => {
+    if (!panelVisible || suppressPanelUntilPlan) {
+      openTaskSidePanel();
+      return;
+    }
+    setPanelVisible(false);
+  }, [openTaskSidePanel, panelVisible, setPanelVisible, suppressPanelUntilPlan]);
   const showRichSubIssuesSection = shouldRenderRichSubIssuesSection(
     childIssuesLoading,
     childIssues.length,
@@ -5013,8 +5024,31 @@ export function IssueDetail() {
   ]);
 
   useEffect(() => {
+    if (!streamlinedTaskDetailEnabled || !taskChatShellEnabled || !issue?.id) {
+      setBreadcrumbPanelControl(null);
+      return;
+    }
+
+    setBreadcrumbPanelControl({
+      open: panelVisible && !suppressPanelUntilPlan,
+      onToggle: toggleTaskSidePanel,
+    });
+
+    return () => setBreadcrumbPanelControl(null);
+  }, [
+    issue?.id,
+    panelVisible,
+    setBreadcrumbPanelControl,
+    streamlinedTaskDetailEnabled,
+    suppressPanelUntilPlan,
+    taskChatShellEnabled,
+    toggleTaskSidePanel,
+  ]);
+
+  useEffect(() => {
     const showTaskPanelLauncher =
       taskChatShellEnabled &&
+      !streamlinedTaskDetailEnabled &&
       !isMobile &&
       Boolean(issue?.id) &&
       (!panelVisible || suppressPanelUntilPlan);
@@ -5039,6 +5073,7 @@ export function IssueDetail() {
     openTaskSidePanel,
     panelVisible,
     setBreadcrumbToolbar,
+    streamlinedTaskDetailEnabled,
     suppressPanelUntilPlan,
     taskChatShellEnabled,
   ]);
@@ -5138,6 +5173,8 @@ export function IssueDetail() {
           {...sharedProps}
           accountScope={currentUserId ?? "anonymous"}
           fileTabsEnabled={fileViewerEnabled}
+          streamlinedTabs={streamlinedTaskDetailEnabled}
+          showSubtasksTab={streamlinedTaskDetailEnabled}
         />,
         { contentMode: "full-bleed" },
       );
@@ -6419,10 +6456,10 @@ export function IssueDetail() {
   const issueHeaderBlock = (
       <div
         data-testid="issue-detail-header"
-        className={cn(streamlinedTaskDetailEnabled ? "space-y-2" : "space-y-3", shellSectionClass)}
+        className={cn(streamlinedTaskDetailEnabled ? "relative space-y-2" : "space-y-3", shellSectionClass)}
       >
         {streamlinedTaskDetailEnabled ? (
-          <div className="flex min-w-0 items-center gap-2">
+          <div className="flex min-w-0 items-center gap-2 pr-8">
             {issueStatusControl}
             <div data-slot="task-detail-title" className="flex min-w-0 flex-1 items-baseline gap-2">
               <InlineEditor
@@ -6682,37 +6719,31 @@ export function IssueDetail() {
               />
             </TooltipProvider>
           ) : null}
-          {streamlinedTaskDetailEnabled && suppressPanelUntilPlan ? (
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              className="shrink-0"
-              onClick={openTaskSidePanel}
-              title="Show properties"
-            >
-              <SlidersHorizontal className="h-4 w-4" />
-            </Button>
-          ) : null}
-
-          <Popover open={moreOpen} onOpenChange={setMoreOpen}>
-            <PopoverTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                className="shrink-0"
-                aria-label="More task actions"
-                title="More task actions"
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    setMoreOpen(true);
-                  }
-                }}
-              >
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-52 p-1" align="end">
+          <div
+            data-slot="task-title-actions"
+            className={cn(
+              streamlinedTaskDetailEnabled && "absolute right-0 top-0 flex h-7 items-center",
+            )}
+          >
+            <Popover open={moreOpen} onOpenChange={setMoreOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  className="shrink-0"
+                  aria-label="More task actions"
+                  title="More task actions"
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setMoreOpen(true);
+                    }
+                  }}
+                >
+                  <MoreHorizontal className="h-4 w-4" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-52 p-1" align="end">
               {streamlinedTaskDetailEnabled ? (
                 <>
                   <button
@@ -6850,8 +6881,9 @@ export function IssueDetail() {
                 <EyeOff className="h-3 w-3" />
                 Hide this task
               </button>
-            </PopoverContent>
-          </Popover>
+              </PopoverContent>
+            </Popover>
+          </div>
         </div>
       </div>
 
@@ -7771,6 +7803,8 @@ export function IssueDetail() {
                   onCheckMonitorNow={() => checkIssueMonitorNow.mutate()}
                   checkingMonitorNow={checkIssueMonitorNow.isPending}
                   fileTabsEnabled={fileViewerEnabled}
+                  streamlinedTabs={streamlinedTaskDetailEnabled}
+                  showSubtasksTab={streamlinedTaskDetailEnabled}
                   documentDeepLink={
                     documentDeepLink?.issueId === issue.id
                       ? documentDeepLink

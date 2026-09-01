@@ -61,13 +61,6 @@ function RecentTasksList({
           key={entry.id}
           to={`/issues/${entry.id}`}
           label={entry.title}
-          iconNode={(
-            <span
-              data-slot="recent-task-icon-spacer"
-              className="block size-3.5"
-              aria-hidden="true"
-            />
-          )}
           liveCount={liveIssueIds.has(entry.id) ? 1 : undefined}
         />
       ))}

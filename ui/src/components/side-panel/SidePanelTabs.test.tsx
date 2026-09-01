@@ -101,6 +101,120 @@ describe("SidePanelTabs", () => {
     expect(separators[0]?.parentElement?.querySelector('[data-side-panel-tab-target="inactive-two"]')).not.toBeNull();
   });
 
+  it("restores the pre-rebase Streamlined UI tab treatment", () => {
+    act(() => {
+      root.render(
+        <TooltipProvider>
+          <SidePanelTabs
+            tabs={[
+              { id: "properties", type: "view", label: "Properties", icon: <SlidersHorizontal />, closable: true },
+              { id: "document:plan", type: "document", label: "Implementation plan", icon: <FileText />, closable: true },
+            ]}
+            activeTabId="properties"
+            onActiveTabChange={vi.fn()}
+            onCloseTab={vi.fn()}
+            onAddTab={vi.fn()}
+            appearance="streamlined-task"
+          />
+        </TooltipProvider>,
+      );
+    });
+
+    const tabs = container.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+    expect(tabs).toHaveLength(2);
+    expect(tabs[0]?.className).toContain("text-sm");
+    expect(tabs[0]?.querySelector("svg")).toBeNull();
+    expect(container.querySelectorAll('[data-side-panel-tab-separator="true"]')).toHaveLength(1);
+
+    const propertiesWrapper = container.querySelector<HTMLElement>('[data-side-panel-tab-wrapper="properties"]');
+    expect(propertiesWrapper?.className).toContain("mx-1.5");
+    expect(propertiesWrapper?.className).toContain("h-7");
+    expect(propertiesWrapper?.className).toContain("text-foreground");
+    expect(propertiesWrapper?.className).toContain("hover:bg-accent/50");
+    expect(propertiesWrapper?.className).not.toContain("bg-muted");
+    expect(propertiesWrapper?.style.width).toBe("");
+    expect(propertiesWrapper?.parentElement?.className)
+      .toContain("min-w-(--side-panel-streamlined-tab-min-width)");
+
+    const planLabel = container.querySelector<HTMLElement>('[data-side-panel-tab-target="document:plan"] span');
+    expect(planLabel?.className).toContain("task-detail-pane-tab-label");
+    expect(planLabel?.className).toContain("text-center");
+    const tabList = container.querySelector<HTMLElement>('[role="tablist"]');
+    expect(tabList?.className).toContain("overflow-x-auto");
+    expect(tabList?.className).not.toContain("overflow-hidden");
+    expect(tabList?.firstElementChild?.className).toContain("w-max");
+    expect(tabList?.firstElementChild?.className).toContain("min-w-full");
+    const planCloseButton = container.querySelector<HTMLButtonElement>('button[aria-label="Close Implementation plan"]');
+    expect(planCloseButton?.className).toContain("opacity-0");
+    expect(planCloseButton?.className).toContain("right-0");
+    expect(planCloseButton?.className).toContain("side-panel-tab-close-motion");
+    expect(planCloseButton?.className).not.toContain("side-panel-tab-motion");
+    expect(planCloseButton?.className).not.toContain("group-focus-within/side-panel-tab:opacity-100");
+    const addButton = container.querySelector<HTMLButtonElement>('button[aria-label="Open a new tab"]');
+    expect(addButton?.className).toContain("h-(--side-panel-tab-height)");
+    expect(addButton?.className).toContain("w-(--side-panel-tab-height)");
+    expect(addButton?.className).toContain("hover:bg-accent");
+  });
+
+  it("fades the right edge only while more Streamlined tabs remain", () => {
+    act(() => {
+      root.render(
+        <TooltipProvider>
+          <SidePanelTabs
+            tabs={[
+              { id: "properties", type: "view", label: "Properties", closable: true },
+              { id: "subtasks", type: "view", label: "Subtasks", closable: true },
+              { id: "artifacts", type: "view", label: "Artifacts", closable: true },
+            ]}
+            activeTabId="properties"
+            onActiveTabChange={vi.fn()}
+            onCloseTab={vi.fn()}
+            onAddTab={vi.fn()}
+            appearance="streamlined-task"
+          />
+        </TooltipProvider>,
+      );
+    });
+
+    const tabList = container.querySelector<HTMLElement>('[role="tablist"]')!;
+    Object.defineProperties(tabList, {
+      clientWidth: { configurable: true, value: 152 },
+      scrollWidth: { configurable: true, value: 384 },
+      scrollLeft: { configurable: true, value: 0, writable: true },
+    });
+    act(() => tabList.dispatchEvent(new Event("scroll")));
+    expect(tabList.dataset.scrollEndFade).toBe("true");
+
+    tabList.scrollLeft = 232;
+    act(() => tabList.dispatchEvent(new Event("scroll")));
+    expect(tabList.dataset.scrollEndFade).toBeUndefined();
+  });
+
+  it("selects an inactive Streamlined UI tab without closing it", () => {
+    const onActiveTabChange = vi.fn();
+    const onCloseTab = vi.fn();
+    act(() => {
+      root.render(
+        <TooltipProvider>
+          <SidePanelTabs
+            tabs={[
+              { id: "properties", type: "view", label: "Properties", closable: true },
+              { id: "subtasks", type: "view", label: "Subtasks", closable: true },
+            ]}
+            activeTabId="properties"
+            onActiveTabChange={onActiveTabChange}
+            onCloseTab={onCloseTab}
+            appearance="streamlined-task"
+          />
+        </TooltipProvider>,
+      );
+    });
+
+    act(() => container.querySelector<HTMLButtonElement>('[data-side-panel-tab-target="subtasks"]')?.click());
+    expect(onActiveTabChange).toHaveBeenCalledWith("subtasks");
+    expect(onCloseTab).not.toHaveBeenCalled();
+  });
+
   it("keeps intrinsic tab width stable while giving inactive labels the close-button space", () => {
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
       x: 0,

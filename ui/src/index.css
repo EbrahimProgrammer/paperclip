@@ -278,6 +278,8 @@
      task, project, agent, and future hosts render the same Codex-like chrome. */
   --side-panel-header-height: var(--sz-48px);
   --side-panel-tab-height: var(--sz-30px);
+  --side-panel-streamlined-tab-min-width: var(--sz-72px);
+  --side-panel-tab-edge-fade-width: var(--sz-32px);
   --side-panel-tab-label-max-width: var(--sz-100px);
   --side-panel-tab-label-expanded-max-width: calc(var(--side-panel-tab-label-max-width) + var(--sz-18px));
   --side-panel-tab-label-fade-width: var(--sz-18px);
@@ -614,6 +616,23 @@
   );
 }
 
+/* Keep continuation tabs readable as they pass beneath the fixed add control.
+   The mask is enabled only while content remains beyond the right edge. */
+.side-panel-tabs-scroll[data-scroll-end-fade="true"] {
+  -webkit-mask-image: linear-gradient(
+    to right,
+    var(--foreground) 0,
+    var(--foreground) calc(100% - var(--side-panel-tab-edge-fade-width)),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to right,
+    var(--foreground) 0,
+    var(--foreground) calc(100% - var(--side-panel-tab-edge-fade-width)),
+    transparent 100%
+  );
+}
+
 /* Light mode scrollbar on hover */
 .scrollbar-auto-hide:hover {
   scrollbar-color: oklch(0.7 0 0) transparent;
@@ -847,6 +866,11 @@
   transition-duration: var(--motion-side-panel-tab);
   transition-timing-function: var(--motion-ease-standard);
 }
+.side-panel-tab-close-motion {
+  transition-property: color, background-color, border-color, box-shadow, transform;
+  transition-duration: var(--motion-side-panel-tab);
+  transition-timing-function: var(--motion-ease-standard);
+}
 .side-panel-tab-label-fade {
   -webkit-mask-image: linear-gradient(to right, black calc(100% - var(--side-panel-tab-label-fade-width)), transparent);
   mask-image: linear-gradient(to right, black calc(100% - var(--side-panel-tab-label-fade-width)), transparent);
@@ -868,7 +892,8 @@
   .tc-turn-metrics,
   .tc-line-scroll-inner,
   .tc-pane-glide,
-  .side-panel-tab-motion { transition: none; }
+  .side-panel-tab-motion,
+  .side-panel-tab-close-motion { transition: none; }
   /* The pill keyframes carry the X-centering; with animation:none restore it. */
   .tc-scroll-pill-in,
   .tc-scroll-pill-out { transform: translate(-50%, 0); }

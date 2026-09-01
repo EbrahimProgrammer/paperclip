@@ -124,6 +124,7 @@ const mockIssuePropertiesRender = vi.hoisted(() => vi.fn());
 const mockTaskSidePanelRender = vi.hoisted(() => vi.fn());
 const mockSetBreadcrumbs = vi.hoisted(() => vi.fn());
 const mockSetBreadcrumbToolbar = vi.hoisted(() => vi.fn());
+const mockSetBreadcrumbPanelControl = vi.hoisted(() => vi.fn());
 const mockSetMobileToolbar = vi.hoisted(() => vi.fn());
 const mockPushToast = vi.hoisted(() => vi.fn());
 const mockIssuesListRender = vi.hoisted(() => vi.fn());
@@ -276,6 +277,7 @@ vi.mock("../context/BreadcrumbContext", () => ({
   useBreadcrumbs: () => ({
     setBreadcrumbs: mockSetBreadcrumbs,
     setBreadcrumbToolbar: mockSetBreadcrumbToolbar,
+    setBreadcrumbPanelControl: mockSetBreadcrumbPanelControl,
     setMobileToolbar: mockSetMobileToolbar,
   }),
 }));
@@ -1345,6 +1347,7 @@ describe("IssueDetail", () => {
     mockOpenPanel.mockClear();
     mockClosePanel.mockClear();
     mockSetPanelVisible.mockClear();
+    mockSetBreadcrumbPanelControl.mockClear();
     mockSetMobileToolbar.mockClear();
     mockIssuePropertiesRender.mockClear();
     mockTaskSidePanelRender.mockClear();
@@ -1395,8 +1398,14 @@ describe("IssueDetail", () => {
     expect(container.textContent).toContain("Task chat thread");
     const titleGroup = container.querySelector('[data-slot="task-detail-title"]');
     const identifier = titleGroup?.querySelector('[data-slot="task-title-identifier"]');
+    const titleRow = titleGroup?.parentElement;
+    const titleActions = container.querySelector('[data-slot="task-title-actions"]');
     expect(titleGroup?.textContent?.replace(/\s+/g, " ").trim()).toBe("Issue detail smokePAP-1");
     expect(identifier?.textContent).toBe("PAP-1");
+    expect(titleRow?.className).toContain("pr-8");
+    expect(titleActions?.className).toContain("absolute");
+    expect(titleActions?.className).toContain("top-0");
+    expect(titleActions?.querySelector('button[aria-label="More task actions"]')).not.toBeNull();
     expect(
       consoleErrorSpy.mock.calls.some((call: unknown[]) =>
         String(call[0]).includes(
@@ -1432,24 +1441,10 @@ describe("IssueDetail", () => {
     });
   });
 
-  it("registers the persistent breadcrumb side-panel toggle only while the panel is closed", async () => {
+  it("does not register a redundant breadcrumb side-panel toggle in Streamlined UI", async () => {
     mockIssuesApi.get.mockResolvedValue(createIssue());
-
-    await act(async () => {
-      root.render(
-        <QueryClientProvider client={queryClient}>
-          <IssueDetail />
-        </QueryClientProvider>,
-      );
-    });
-    await flushReact();
-    expect(
-      container.querySelector('button[aria-label="Toggle side panel"]'),
-    ).toBeNull();
-    expect(mockSetBreadcrumbToolbar.mock.calls.at(-1)?.[0]).toBeNull();
-
-    mockSetBreadcrumbToolbar.mockClear();
     mockPanelState.panelVisible = false;
+
     await act(async () => {
       root.render(
         <QueryClientProvider client={queryClient}>
@@ -1458,9 +1453,27 @@ describe("IssueDetail", () => {
       );
     });
     await flushReact();
-    expect(
-      container.querySelector('button[aria-label="Toggle side panel"]'),
-    ).toBeNull();
+    expect(mockSetBreadcrumbToolbar.mock.calls.every(([node]) => node === null)).toBe(true);
+  });
+
+  it("retains the production breadcrumb side-panel toggle when Streamlined UI is off", async () => {
+    mockIssuesApi.get.mockResolvedValue(createIssue());
+    mockPanelState.panelVisible = false;
+    mockInstanceSettingsApi.getExperimental.mockResolvedValue({
+      enableIssuePlanDecompositions: false,
+      enableExperimentalFileViewer: false,
+      enableExternalObjects: false,
+      enableStreamlinedUi: false,
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <IssueDetail />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
 
     const toolbar = mockSetBreadcrumbToolbar.mock.calls
       .map(([node]) => node)
@@ -3186,6 +3199,7 @@ describe("IssueDetail", () => {
 
   it("starts a planning-mode task as chat-only until its plan document exists", async () => {
     mockSetBreadcrumbToolbar.mockClear();
+    mockSetBreadcrumbPanelControl.mockClear();
     mockInstanceSettingsApi.getExperimental.mockResolvedValue({
       enableIssuePlanDecompositions: false,
       enableExperimentalFileViewer: false,
@@ -3217,7 +3231,12 @@ describe("IssueDetail", () => {
       .reverse()
       .map(([node]) => node)
       .find((node) => node !== null);
-    expect(toolbar).toBeDefined();
+    expect(toolbar).toBeUndefined();
+    const panelControl = [...mockSetBreadcrumbPanelControl.mock.calls]
+      .reverse()
+      .map(([control]) => control)
+      .find((control) => control !== null);
+    expect(panelControl).toMatchObject({ open: false });
   });
 
   it("reveals the planning-mode task sidebar when its plan document exists", async () => {
@@ -3247,6 +3266,7 @@ describe("IssueDetail", () => {
 
   it("keeps the Show properties button clickable on the first task and reveals the sidebar on demand", async () => {
     mockSetBreadcrumbToolbar.mockClear();
+    mockSetBreadcrumbPanelControl.mockClear();
     mockInstanceSettingsApi.getExperimental.mockResolvedValue({
       enableIssuePlanDecompositions: false,
       enableExperimentalFileViewer: false,
@@ -3270,18 +3290,20 @@ describe("IssueDetail", () => {
     await flushReact();
     expect(mockOpenPanel).not.toHaveBeenCalled();
 
-    // Even though panelVisible is true, the suppressed first task registers
-    // the persistent top-row opt-in launcher.
-    const toolbar = [...mockSetBreadcrumbToolbar.mock.calls]
+    // Even though panelVisible is true, the suppressed first task routes the
+    // single breadcrumb panel control through its per-task opt-in behavior.
+    const panelControl = [...mockSetBreadcrumbPanelControl.mock.calls]
       .reverse()
-      .map(([node]) => node)
-      .find((node) => node !== null) as ReactElement<{
-      children: ReactElement<{ onToggle: () => void }>;
-    }>;
-    expect(toolbar).toBeDefined();
+      .map(([control]) => control)
+      .find((control) => control !== null) as {
+      open: boolean;
+      onToggle: () => void;
+    };
+    expect(panelControl).toMatchObject({ open: false });
+    expect(mockSetBreadcrumbToolbar.mock.calls.every(([node]) => node === null)).toBe(true);
 
     await act(async () => {
-      toolbar.props.children.props.onToggle();
+      panelControl.onToggle();
     });
     await flushReact();
 

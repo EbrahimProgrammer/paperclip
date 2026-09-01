@@ -131,18 +131,27 @@ describe("PropertiesPanel", () => {
       const inner = aside!.querySelector<HTMLDivElement>(":scope > div:not([role])");
       expect(inner!.style.width).toBe("434px");
       expect(inner!.style.minWidth).toBe("434px");
+      expect(aside!.querySelector("header")?.className).toContain("h-(--sz-60px)");
     });
 
-    it("uses the pressed side-panel toggle instead of an X to hide the open pane", async () => {
+    it("uses an X to close the Streamlined task-detail sidebar", async () => {
+      await renderPanel({ taskDetailLayout: true });
+      const close = container.querySelector<HTMLButtonElement>('[aria-label="Close side panel"]');
+      expect(close).not.toBeNull();
+      expect(close!.querySelector(".lucide-x")).not.toBeNull();
+      expect(container.querySelector('[aria-label="Toggle side panel"]')).toBeNull();
+
+      close!.click();
+      expect(mockSetPanelVisible).toHaveBeenCalledWith(false);
+    });
+
+    it("keeps the production toggle control outside Streamlined task detail", async () => {
       await renderPanel();
       const toggle = container.querySelector<HTMLButtonElement>('[aria-label="Toggle side panel"]');
       expect(toggle).not.toBeNull();
       expect(toggle!.getAttribute("aria-pressed")).toBe("true");
       expect(toggle!.querySelector(".lucide-panel-right-close")).not.toBeNull();
-      expect(container.querySelector('[aria-label="Hide side panel"]')).toBeNull();
-
-      toggle!.click();
-      expect(mockSetPanelVisible).toHaveBeenCalledWith(false);
+      expect(container.querySelector('[aria-label="Close side panel"]')).toBeNull();
     });
 
     it("restores a remembered width from localStorage (clamped to the minimum)", async () => {
@@ -187,7 +196,7 @@ describe("PropertiesPanel", () => {
       expect(aside).not.toBeNull();
       expect(aside!.style.width).toBe("322px");
       expect(aside!.querySelector('[role="separator"][aria-label="Resize panel"]')).not.toBeNull();
-      expect(container.querySelector('[aria-label="Maximize panel"]')).not.toBeNull();
+      expect(container.querySelector('[aria-label="Maximize side panel"]')).not.toBeNull();
     });
 
     it("still honors the independent Classic Task Interface preference", async () => {

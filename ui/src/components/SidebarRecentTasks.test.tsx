@@ -125,9 +125,9 @@ describe("SidebarRecentTasks", () => {
     expect(link?.textContent).toContain("Refreshed title");
     expect(link?.textContent).toContain("1 live");
     expect(link?.querySelector('[aria-label="In Progress"]')).toBeNull();
-    const iconSpacer = link?.querySelector('[data-slot="recent-task-icon-spacer"]');
-    expect(iconSpacer).not.toBeNull();
-    expect(iconSpacer?.classList).toContain("size-3.5");
+    expect(link?.querySelector('[data-slot="recent-task-icon-spacer"]')).toBeNull();
+    expect(link?.querySelector('[data-slot="sidebar-nav-icon"]')).toBeNull();
+    expect(link?.firstElementChild?.textContent).toBe("Refreshed title");
   });
 
   it("synchronizes recent tasks written by another tab", async () => {

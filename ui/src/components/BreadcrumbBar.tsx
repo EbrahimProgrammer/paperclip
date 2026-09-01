@@ -53,10 +53,17 @@ function GlobalToolbar({
 }
 
 export function BreadcrumbBar({ taskDetailLayout = false }: { taskDetailLayout?: boolean }) {
-  const { breadcrumbs, breadcrumbToolbar, mobileToolbar } = useBreadcrumbs();
+  const {
+    breadcrumbs,
+    breadcrumbToolbar,
+    breadcrumbPanelControl,
+    mobileToolbar,
+  } = useBreadcrumbs();
   const { toggleSidebar, toggleCollapsed, collapsed, isMobile } = useSidebar();
   const { panelVisible, togglePanelVisible } = usePanel();
   const { selectedCompanyId, selectedCompany } = useCompany();
+  const taskPanelOpen = breadcrumbPanelControl?.open ?? panelVisible;
+  const toggleTaskPanel = breadcrumbPanelControl?.onToggle ?? togglePanelVisible;
 
   const globalToolbarSlotContext = useMemo(
     () => ({
@@ -215,12 +222,12 @@ export function BreadcrumbBar({ taskDetailLayout = false }: { taskDetailLayout?:
         <Button
           variant="ghost"
           size="icon-sm"
-          className="-mr-3 ml-5 h-full w-(--sz-66px) shrink-0 rounded-none text-muted-foreground"
-          onClick={togglePanelVisible}
-          aria-label={panelVisible ? "Hide properties" : "Show properties"}
-          title={panelVisible ? "Hide properties" : "Show properties"}
+          className="ml-5 size-9 shrink-0 text-muted-foreground"
+          onClick={toggleTaskPanel}
+          aria-label={taskPanelOpen ? "Hide properties" : "Show properties"}
+          title={taskPanelOpen ? "Hide properties" : "Show properties"}
         >
-          {panelVisible ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
+          {taskPanelOpen ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
         </Button>
       ) : null}
     </div>

@@ -1076,6 +1076,7 @@ export function DiscoveryGrid({
   onEnsureMyFolder,
   onOpenMoveCard,
   folderNudgeStorageKey,
+  showBrowseRails = true,
 }: {
   tab: DiscoveryTab;
   categories: DiscoveryCategory[];
@@ -1125,6 +1126,8 @@ export function DiscoveryGrid({
   onOpenMoveCard?: (card: DiscoveryCard) => void;
   /** When set and no folders exist yet, show the dismissible all-unfiled nudge (ux-spec §6.3). */
   folderNudgeStorageKey?: string;
+  /** Category/folder navigation stays available in production, but the Streamlined UI relies on search and scrolling. */
+  showBrowseRails?: boolean;
 }) {
   const installedView = tab === "installed";
   const viewTitle = installedView ? "Installed skills" : "Discover skills";
@@ -1169,7 +1172,7 @@ export function DiscoveryGrid({
   // The nested folder tree owns the left rail whenever folders (reserved roots
   // or user folders) exist for the installed view.
   const showFolderRail = Boolean(
-    folderResult && folderResult.folders.length > 0 && onFolderSelect && folderActionsReady,
+    showBrowseRails && folderResult && folderResult.folders.length > 0 && onFolderSelect && folderActionsReady,
   );
   const activeProjectFolder = useMemo(() => {
     if (!folderResult || folderSelection === "all" || folderSelection === "unfiled") return null;
@@ -1202,27 +1205,27 @@ export function DiscoveryGrid({
           />
         </div>
       ) : null}
-      {/* Category and folder controls remain local while the stable Skills
-          navigation is supplied by the contextual shell. */}
-      <aside className={cn("hidden w-60 shrink-0 flex-col overflow-hidden border-r border-border md:flex", showFolderRail && "md:hidden")}>
-        <div className="border-b border-border px-4 py-4">
-          <h2 className="text-sm font-semibold text-foreground">Browse by category</h2>
-          <p className="text-xs text-muted-foreground">
-            Filter {installedView ? "installed" : "discoverable"} skills.
-          </p>
-        </div>
-        <div className="px-4 pb-1 pt-3 text-(length:--text-micro) font-medium uppercase tracking-wide text-muted-foreground">
-          Categories
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto pb-4">
-          <CategoryNav
-            categories={categories}
-            total={categoryTotal}
-            active={activeCategory}
-            onSelect={onCategoryChange}
-          />
-        </div>
-      </aside>
+      {showBrowseRails ? (
+        <aside className={cn("hidden w-60 shrink-0 flex-col overflow-hidden border-r border-border md:flex", showFolderRail && "md:hidden")}>
+          <div className="border-b border-border px-4 py-4">
+            <h2 className="text-sm font-semibold text-foreground">Browse by category</h2>
+            <p className="text-xs text-muted-foreground">
+              Filter {installedView ? "installed" : "discoverable"} skills.
+            </p>
+          </div>
+          <div className="px-4 pb-1 pt-3 text-(length:--text-micro) font-medium uppercase tracking-wide text-muted-foreground">
+            Categories
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto pb-4">
+            <CategoryNav
+              categories={categories}
+              total={categoryTotal}
+              active={activeCategory}
+              onSelect={onCategoryChange}
+            />
+          </div>
+        </aside>
+      ) : null}
 
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         {/* Search + sort + actions */}
@@ -1321,7 +1324,7 @@ export function DiscoveryGrid({
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          {folderResult && onFolderSelect ? (
+          {showBrowseRails && folderResult && onFolderSelect ? (
             <div className="w-full md:hidden">
               <FolderChip
                 result={folderResult}
@@ -1345,7 +1348,7 @@ export function DiscoveryGrid({
         </div>
 
         {/* Mobile category selector (sidebar is hidden below md) */}
-        {categories.length > 0 ? (
+        {showBrowseRails && categories.length > 0 ? (
           <div className="border-b border-border px-4 py-2 md:hidden">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -4113,6 +4116,9 @@ export function CompanySkills() {
   // selected; selecting either drops into the existing master/detail surfaces.
   const isDiscovery = !isStudioNew && !routeSkillToken && !selectedCatalogRef;
   const folderSelection = normalizeFolderSelection(searchParams.get("folder"));
+  const browseRailsEnabled = !streamlinedUiEnabled;
+  const visibleDiscoveryCategory = browseRailsEnabled ? discoveryCategory : null;
+  const visibleFolderSelection: FolderSelection = browseRailsEnabled ? folderSelection : "all";
 
   function setDiscoveryTab(tab: DiscoveryTab) {
     setSearchParams((current) => withDiscoveryTab(current, tab));
@@ -4196,7 +4202,8 @@ export function CompanySkills() {
     if (!streamlinedUiEnabled) return;
     const legacyTab = searchParams.get("tab");
     const hasLegacyDiscoveryTab = isDiscovery && ["all", "catalog", "bundled"].includes(legacyTab ?? "");
-    if (!searchParams.has("view") && !hasLegacyDiscoveryTab) return;
+    const hasRetiredBrowseFilter = isDiscovery && (searchParams.has("category") || searchParams.has("folder"));
+    if (!searchParams.has("view") && !hasLegacyDiscoveryTab && !hasRetiredBrowseFilter) return;
     setSearchParams(
       (current) => {
         const next = new URLSearchParams(current);
@@ -4204,11 +4211,21 @@ export function CompanySkills() {
           next.set("tab", "discover");
         }
         next.delete("view");
+        if (isDiscovery) {
+          next.delete("category");
+          next.delete("folder");
+        }
         return next;
       },
       { replace: true },
     );
   }, [isDiscovery, searchParams, setSearchParams, streamlinedUiEnabled]);
+
+  useEffect(() => {
+    if (!streamlinedUiEnabled) return;
+    setSelectMode(false);
+    setSelectedSkillIds([]);
+  }, [streamlinedUiEnabled]);
 
   const skillsQuery = useQuery({
     queryKey: queryKeys.companySkills.list(selectedCompanyId ?? ""),
@@ -4267,15 +4284,15 @@ export function CompanySkills() {
 
   // The writable folder to seed a new skill into when creating from the browser.
   const defaultNewSkillFolderId = useMemo(() => {
-    if (folderSelection === "all" || folderSelection === "unfiled") return null;
+    if (visibleFolderSelection === "all" || visibleFolderSelection === "unfiled") return null;
     const model = treeFromResult(skillFoldersQuery.data);
-    const folder = model.byId.get(folderSelection);
+    const folder = model.byId.get(visibleFolderSelection);
     if (!folder) return null;
     // Never seed into read-only reserved subtrees (Bundled / Projects).
     if (folder.path === "bundled" || folder.path.startsWith("bundled/")) return null;
     if (folder.path === "projects" || folder.path.startsWith("projects/")) return null;
     return folder.id;
-  }, [folderSelection, skillFoldersQuery.data]);
+  }, [skillFoldersQuery.data, visibleFolderSelection]);
 
   const updateStatusQuery = useQuery({
     queryKey: queryKeys.companySkills.updateStatus(selectedCompanyId ?? "", selectedSkillId ?? ""),
@@ -4634,24 +4651,24 @@ export function CompanySkills() {
   // Selecting a folder shows its whole subtree (folder + descendants), matching
   // the folder-browser model. `null` means no subtree constraint (All/Unfiled).
   const folderSubtreeIds = useMemo(() => {
-    if (folderSelection === "all" || folderSelection === "unfiled") return null;
+    if (visibleFolderSelection === "all" || visibleFolderSelection === "unfiled") return null;
     const model = treeFromResult(skillFoldersQuery.data);
-    if (!model.byId.has(folderSelection)) return null;
-    return subtreeFolderIds(model, folderSelection);
-  }, [folderSelection, skillFoldersQuery.data]);
+    if (!model.byId.has(visibleFolderSelection)) return null;
+    return subtreeFolderIds(model, visibleFolderSelection);
+  }, [skillFoldersQuery.data, visibleFolderSelection]);
   const visibleDiscoveryCards = useMemo(() => {
     const filtered = discoveryTabCards.filter((card) => {
-      if (discoveryCategory && !card.categories.includes(discoveryCategory)) return false;
+      if (visibleDiscoveryCategory && !card.categories.includes(visibleDiscoveryCategory)) return false;
       // Search spans all folders (user story 5): the folder filter only
       // narrows when the user is browsing, never when searching.
       if (effectiveDiscoveryTab === "installed" && !discoverySearchActive) {
-        if (folderSelection === "unfiled" && card.folderId) return false;
+        if (visibleFolderSelection === "unfiled" && card.folderId) return false;
         if (folderSubtreeIds && (!card.folderId || !folderSubtreeIds.has(card.folderId))) return false;
       }
       return discoveryMatchesSearch(card, discoverySearch.trim());
     });
     return sortDiscoveryCards(filtered, discoverySort, effectiveDiscoveryTab === "discover");
-  }, [discoveryTabCards, discoveryCategory, discoverySearch, discoverySearchActive, discoverySort, effectiveDiscoveryTab, folderSelection, folderSubtreeIds]);
+  }, [discoverySearch, discoverySearchActive, discoverySort, discoveryTabCards, effectiveDiscoveryTab, folderSubtreeIds, visibleDiscoveryCategory, visibleFolderSelection]);
 
   const selectedCatalogSkill = catalogDetailQuery.data
     ?? (catalogListQuery.data ?? []).find((entry) => entry.id === selectedCatalogRef || entry.key === selectedCatalogRef)
@@ -4898,9 +4915,9 @@ export function CompanySkills() {
 
   async function openNewSkill() {
     const model = treeFromResult(skillFoldersQuery.data);
-    const selectedFolder = folderSelection === "all" || folderSelection === "unfiled"
+    const selectedFolder = visibleFolderSelection === "all" || visibleFolderSelection === "unfiled"
       ? null
-      : model.byId.get(folderSelection) ?? null;
+      : model.byId.get(visibleFolderSelection) ?? null;
     if (selectedFolder?.systemKey === "my") {
       try {
         const personalFolder = await ensureMyFolder.mutateAsync();
@@ -5113,12 +5130,13 @@ export function CompanySkills() {
 
   const skillFolderResult = skillFoldersQuery.data ?? null;
   const showInstalledFolders = isDiscovery && effectiveDiscoveryTab === "installed";
+  const showInstalledBulkSelection = showInstalledFolders && !streamlinedUiEnabled;
   // Rail counts reflect the current category/search scope, never the folder
   // filter itself (ux-spec §5.3).
   const railSkillFolderResult = useMemo(() => {
     if (!skillFolderResult || effectiveDiscoveryTab !== "installed") return skillFolderResult;
     const scoped = discoveryTabCards.filter((card) => {
-      if (discoveryCategory && !card.categories.includes(discoveryCategory)) return false;
+      if (visibleDiscoveryCategory && !card.categories.includes(visibleDiscoveryCategory)) return false;
       return discoveryMatchesSearch(card, discoverySearch.trim());
     });
     const direct = new Map<string, number>();
@@ -5140,7 +5158,7 @@ export function CompanySkills() {
         return { ...folder, itemCount };
       }),
     };
-  }, [skillFolderResult, effectiveDiscoveryTab, discoveryTabCards, discoveryCategory, discoverySearch]);
+  }, [discoverySearch, discoveryTabCards, effectiveDiscoveryTab, skillFolderResult, visibleDiscoveryCategory]);
   const activeSkillFolderDisplayPath = useMemo(
     () => skillFolderDisplayPath(treeFromResult(skillFolderResult), activeDetail?.folderId),
     [skillFolderResult, activeDetail?.folderId],
@@ -5467,7 +5485,7 @@ export function CompanySkills() {
           tab={effectiveDiscoveryTab}
           categories={discoveryCategoryCounts}
           categoryTotal={discoveryTabCards.length}
-          activeCategory={discoveryCategory}
+          activeCategory={visibleDiscoveryCategory}
           onCategoryChange={setDiscoveryCategory}
           search={discoverySearch}
           onSearchChange={setDiscoverySearch}
@@ -5486,10 +5504,10 @@ export function CompanySkills() {
           scanPending={scanProjects.isPending}
           scanStatus={scanStatusMessage}
           folderResult={showInstalledFolders ? railSkillFolderResult : null}
-          folderSelection={folderSelection}
+          folderSelection={visibleFolderSelection}
           foldersLoading={skillFoldersQuery.isLoading}
-          selectMode={showInstalledFolders && selectMode}
-          selectedSkillIds={selectedSkillIds}
+          selectMode={showInstalledBulkSelection && selectMode}
+          selectedSkillIds={showInstalledBulkSelection ? selectedSkillIds : []}
           onFolderSelect={showInstalledFolders ? setFolderSelection : undefined}
           onOpenMobileFolders={showInstalledFolders ? () => setMobileFoldersOpen(true) : undefined}
           onCreateFolder={showInstalledFolders ? () => openCreateFolder() : undefined}
@@ -5511,11 +5529,11 @@ export function CompanySkills() {
           } : undefined}
           onMoveFolder={showInstalledFolders ? (folder, destination) => void moveFolderBetweenScopes(folder, destination) : undefined}
           onDeleteFolder={showInstalledFolders ? setDeleteFolderTarget : undefined}
-          onToggleSelectMode={showInstalledFolders ? () => {
+          onToggleSelectMode={showInstalledBulkSelection ? () => {
             setSelectMode((current) => !current);
             if (selectMode) setSelectedSkillIds([]);
           } : undefined}
-          onSelectCard={showInstalledFolders ? (card, selected) => {
+          onSelectCard={showInstalledBulkSelection ? (card, selected) => {
             if (!card.skillId) return;
             setSelectedSkillIds((current) =>
               selected
@@ -5543,10 +5561,11 @@ export function CompanySkills() {
           onCreateFolderAndMoveCard={showInstalledFolders ? (card) => {
             if (card.skillId) openCreateFolder([card.skillId]);
           } : undefined}
-          onMoveSelected={showInstalledFolders ? (folderId) => void moveSelectedSkills(folderId) : undefined}
-          onCreateFolderAndMoveSelected={showInstalledFolders ? () => openCreateFolder(selectedSkillIds) : undefined}
-          onClearSelected={showInstalledFolders ? () => setSelectedSkillIds([]) : undefined}
+          onMoveSelected={showInstalledBulkSelection ? (folderId) => void moveSelectedSkills(folderId) : undefined}
+          onCreateFolderAndMoveSelected={showInstalledBulkSelection ? () => openCreateFolder(selectedSkillIds) : undefined}
+          onClearSelected={showInstalledBulkSelection ? () => setSelectedSkillIds([]) : undefined}
           folderNudgeStorageKey={showInstalledFolders ? `paperclip:skills-folder-nudge:${selectedCompanyId ?? "none"}` : undefined}
+          showBrowseRails={browseRailsEnabled}
         />
         </>
       ) : activeView === "installed" && selectedSkillId ? (
