@@ -305,6 +305,31 @@ fn codex_transport_buffers_notifications_while_waiting_for_responses() {
 }
 
 #[test]
+fn codex_goal_autostart_binds_the_provider_turn_authority() {
+    let directory = temporary_directory("goal-autostart");
+    let config = provider_config(&directory, &["--goal-autostart"]);
+    let mut provider = CodexProvider::start(&config, None).expect("start fake Codex provider");
+
+    let result = provider
+        .set_goal(Some("Complete the fake goal."), Some("active"), None)
+        .expect("activate the provider goal");
+    assert_eq!(result.pointer("/goal/status"), Some(&json!("active")));
+
+    let started = wait_for_notification(&mut provider, "turn/started");
+    assert_eq!(
+        started.pointer("/turn/id"),
+        Some(&json!("provider-goal-turn-1")),
+    );
+    assert_eq!(
+        provider.active_provider_turn_id(),
+        Some("provider-goal-turn-1"),
+    );
+
+    provider.shutdown().expect("stop provider");
+    fs::remove_dir_all(directory).expect("remove Codex integration-test directory");
+}
+
+#[test]
 fn codex_dynamic_tool_round_trips_through_the_provider_boundary() {
     let directory = temporary_directory("dynamic-tool");
     let config = provider_config(&directory, &["--require-dynamic-tool", "--emit-tool-call"]);
