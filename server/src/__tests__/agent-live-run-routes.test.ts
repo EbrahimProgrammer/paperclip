@@ -1,6 +1,7 @@
 import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { hoistModuleGraph } from "./helpers/hoist-module-graph.js";
 
 const mockAgentService = vi.hoisted(() => ({
   getById: vi.fn(),
@@ -132,35 +133,6 @@ function registerModuleMocks() {
   }));
 }
 
-async function createApp(
-  db: Record<string, unknown> = {},
-  actor: Record<string, unknown> = {
-    type: "board",
-    userId: "local-board",
-    companyIds: ["company-1"],
-    source: "local_implicit",
-    isInstanceAdmin: false,
-  },
-) {
-  const [{ agentRoutes }, { errorHandler }] = await Promise.all([
-    vi.importActual<typeof import("../routes/agents.js")>(
-      "../routes/agents.js",
-    ),
-    vi.importActual<typeof import("../middleware/index.js")>(
-      "../middleware/index.js",
-    ),
-  ]);
-  const app = express();
-  app.use(express.json());
-  app.use((req, _res, next) => {
-    (req as any).actor = actor;
-    next();
-  });
-  app.use("/api", agentRoutes(db as any));
-  app.use(errorHandler);
-  return app;
-}
-
 function createLiveRunsDbStub(rows: Array<Record<string, unknown>>) {
   const limit = vi.fn(async (value: number) => rows.slice(0, value));
   const orderedQuery = {
@@ -222,18 +194,42 @@ async function requestApp(
 }
 
 describe("agent live run routes", () => {
+  const routeModules = hoistModuleGraph(registerModuleMocks, async () => {
+    // Import the route module, then the middleware module, one after the
+    // other. A concurrent `Promise.all` import of two module graphs can
+    // interleave them and drop a `vi.doMock` factory.
+    const { agentRoutes } = await vi.importActual<
+      typeof import("../routes/agents.js")
+    >("../routes/agents.js");
+    const { errorHandler } = await vi.importActual<
+      typeof import("../middleware/index.js")
+    >("../middleware/index.js");
+    return { agentRoutes, errorHandler };
+  });
+
+  function createApp(
+    db: Record<string, unknown> = {},
+    actor: Record<string, unknown> = {
+      type: "board",
+      userId: "local-board",
+      companyIds: ["company-1"],
+      source: "local_implicit",
+      isInstanceAdmin: false,
+    },
+  ) {
+    const { agentRoutes, errorHandler } = routeModules.value;
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => {
+      (req as any).actor = actor;
+      next();
+    });
+    app.use("/api", agentRoutes(db as any));
+    app.use(errorHandler);
+    return app;
+  }
+
   beforeEach(() => {
-    vi.resetModules();
-    vi.doUnmock("../services/agents.js");
-    vi.doUnmock("../services/heartbeat.js");
-    vi.doUnmock("../services/index.js");
-    vi.doUnmock("../services/instance-settings.js");
-    vi.doUnmock("../services/issues.js");
-    vi.doUnmock("../adapters/index.js");
-    vi.doUnmock("../routes/agents.js");
-    vi.doUnmock("../routes/authz.js");
-    vi.doUnmock("../middleware/index.js");
-    registerModuleMocks();
     vi.clearAllMocks();
     mockIssueService.getByIdentifier.mockResolvedValue({
       id: "issue-1",
@@ -360,7 +356,7 @@ describe("agent live run routes", () => {
     expect(res.body).not.toHaveProperty("resultJson");
     expect(res.body).not.toHaveProperty("contextSnapshot");
     expect(res.body).not.toHaveProperty("logRef");
-  }, 10_000);
+  });
 
   it("ignores a stale execution run from another issue and falls back to the assignee's matching run", async () => {
     mockHeartbeatService.getRunIssueSummary.mockResolvedValue({
