@@ -389,6 +389,7 @@ import {
   resolvePaperclipRunnerIdleTimeoutMs,
   resolvePaperclipRunnerPermissionMode,
   resolveSessionCompactionPolicy,
+  type AcpxPermissionMode,
   type RuntimeStatusUpdate,
   type SessionCompactionPolicy,
 } from "@paperclipai/adapter-utils";
@@ -3933,6 +3934,28 @@ export function buildReferencedProjectRunObservability(input: {
 
 function readNonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+/**
+ * Preserve the agent's ACP permission policy when a durable goal switches a
+ * Claude/Codex local adapter onto the persistent native ACP runtime. The
+ * canonical native key takes precedence, followed by the current and legacy
+ * direct-adapter keys. Missing or invalid values retain the native runtime's
+ * fail-safe `approve-reads` default instead of silently escalating the goal to
+ * unrestricted execution.
+ */
+export function resolveDurableGoalAcpxPermissionMode(
+  config: unknown,
+): AcpxPermissionMode {
+  const parsed = parseObject(config);
+  const configuredMode =
+    readNonEmptyString(parsed.acpxPermissionMode) ??
+    readNonEmptyString(parsed.permissionMode) ??
+    readNonEmptyString(parsed.acpPermissionMode);
+  return resolvePaperclipRunnerPermissionMode(
+    "acpx",
+    configuredMode,
+  ) as AcpxPermissionMode;
 }
 
 function parseNativeSessionGoalControl(
@@ -20067,7 +20090,8 @@ export function heartbeatService(
             ...runtimeConfig,
             acpxAgent: goalAcpxAgent,
             model: goalAcpxModel,
-            acpxPermissionMode: "approve-all",
+            acpxPermissionMode:
+              resolveDurableGoalAcpxPermissionMode(runtimeConfig),
           };
         }
         const goalNativeRuntimeConfig = goalAcpxAgent
