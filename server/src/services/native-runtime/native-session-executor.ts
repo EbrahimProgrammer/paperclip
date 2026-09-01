@@ -6012,6 +6012,7 @@ export async function createRunnerdBackend(input: {
   };
   const backend = createNativeSessionBackend(runnerExecution, {
     runnerInstanceId: input.runnerInstanceId,
+    environment: effectiveRunnerEnvironment,
     onSpawn: input.onSpawn,
     dynamicTools,
     dynamicToolHandler: (call) => authorityRouter.execute(call),
