@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 
 use super::state::{
     Command, CommandDisposition, DurableState, DurableStateStore, EventPriority,
-    StoredCommandResult,
+    StoredCommandResult, StoredOutboxEvent,
 };
 use super::transport::{
     current_unix_ms, validate_control_identity, AuthenticatedTransport, ConnectionMetadata,
@@ -528,6 +528,24 @@ fn process_command<E: CommandExecutor>(
     Ok((result, CommandLifecycle::for_completed(command)))
 }
 
+fn event_envelope_for_protocol(event: &StoredOutboxEvent, protocol_version: u64) -> Value {
+    let mut envelope = event.envelope.clone();
+    if protocol_version == 1 && envelope.pointer("/payload/schemaVersion") == Some(&json!(2)) {
+        // Preserve the source sequence on a v1 connection so its cumulative
+        // ACK can advance past an event family that only exists in PRP v2.
+        // Never copy the v2 payload because it can include a goal objective.
+        envelope["payload"]["schema"] = json!("paperclip.prp.event.v1");
+        envelope["payload"]["eventType"] = json!("runner.diagnostic");
+        envelope["payload"]["schemaVersion"] = json!(1);
+        envelope["payload"]["payload"] = json!({
+            "reasonCode": "event_requires_prp_v2",
+            "originalEventType": event.event_type,
+        });
+    }
+    envelope["version"] = json!(protocol_version);
+    envelope
+}
+
 fn send_outbox(
     transport: &mut AuthenticatedTransport,
     state: &DurableState,
@@ -538,15 +556,7 @@ fn send_outbox(
         if event.source_seq <= *sent_source_seq {
             continue;
         }
-        if protocol_version == 1
-            && event.envelope.pointer("/payload/schemaVersion") == Some(&json!(2))
-        {
-            return Err(DurableRunnerError::invalid(
-                "a PRP v2 event cannot be delivered over a PRP v1 connection",
-            ));
-        }
-        let mut envelope = event.envelope.clone();
-        envelope["version"] = json!(protocol_version);
+        let envelope = event_envelope_for_protocol(event, protocol_version);
         transport.send_json(&envelope)?;
         *sent_source_seq = event.source_seq;
     }
@@ -701,6 +711,55 @@ mod tests {
         assert_eq!(
             envelope.pointer("/payload/result/code"),
             Some(&json!("execution_indeterminate")),
+        );
+    }
+
+    #[test]
+    fn v2_outbox_event_becomes_redacted_v1_diagnostic_without_losing_sequence() {
+        let config = config(PathBuf::from("unused"));
+        let mut state = DurableState::new(&config);
+        state
+            .enqueue_event(
+                &config,
+                "session.goal.updated",
+                EventPriority::P1,
+                json!({
+                    "goal": {
+                        "objective": "sensitive operator objective",
+                        "status": "active"
+                    }
+                }),
+            )
+            .unwrap();
+        let event = &state.outbox[0];
+
+        let downgraded = event_envelope_for_protocol(event, 1);
+        assert_eq!(downgraded["version"], json!(1));
+        assert_eq!(
+            downgraded.pointer("/payload/sourceSeq"),
+            Some(&json!(event.source_seq)),
+        );
+        assert_eq!(
+            downgraded.pointer("/payload/schema"),
+            Some(&json!("paperclip.prp.event.v1")),
+        );
+        assert_eq!(
+            downgraded.pointer("/payload/eventType"),
+            Some(&json!("runner.diagnostic")),
+        );
+        assert_eq!(
+            downgraded.pointer("/payload/payload/originalEventType"),
+            Some(&json!("session.goal.updated")),
+        );
+        assert!(!downgraded
+            .to_string()
+            .contains("sensitive operator objective"));
+
+        let native = event_envelope_for_protocol(event, 2);
+        assert_eq!(native["version"], json!(2));
+        assert_eq!(
+            native.pointer("/payload/eventType"),
+            Some(&json!("session.goal.updated")),
         );
     }
 

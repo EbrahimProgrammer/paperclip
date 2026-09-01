@@ -108,6 +108,18 @@ describeEmbeddedPostgres("runner goal service", () => {
     expect(repeated.status).toBe("pending");
 
     await expect(service.act(binding.companyId, binding.issueId, {
+      requestId,
+      agentId: binding.agentId,
+      expectedRevision: 0,
+      action: "create",
+      objective: "Reuse the key for different work",
+      tokenBudget: 2_000,
+    })).rejects.toMatchObject({
+      code: "idempotency_key_conflict",
+      projection: { revision: 1 },
+    });
+
+    await expect(service.act(binding.companyId, binding.issueId, {
       requestId: randomUUID(),
       agentId: binding.agentId,
       expectedRevision: 0,
@@ -267,6 +279,89 @@ describeEmbeddedPostgres("runner goal service", () => {
       payload: { goal: null },
     });
     expect(duplicate).toBeNull();
+  });
+
+  it("projects committed capability and goal events exactly once across duplicate delivery", async () => {
+    const binding = await seed();
+    const eventBinding = {
+      ...binding,
+      adapterType: "paperclip_runner",
+    };
+    const source = {
+      sourceInstanceId: "native-runner",
+      sourceRunId: "goal-heartbeat",
+    };
+    const capabilityEvent = {
+      ...source,
+      eventType: "session.capabilities.updated",
+      sourceSeq: 1,
+      payload: {
+        sessionGoals: {
+          availability: "available",
+          actions: ["set", "pause", "resume", "clear"],
+          autonomousUpdates: true,
+          persistentAcrossResume: true,
+          maxObjectiveChars: 4_000,
+          tokenBudgetControl: true,
+          usageReporting: true,
+        },
+      },
+    };
+    const goalEvent = {
+      ...source,
+      eventType: "session.goal.updated",
+      sourceSeq: 2,
+      payload: {
+        workingNow: true,
+        goal: {
+          objective: "Project the durable provider goal",
+          status: "active",
+          tokenBudget: 4_000,
+          tokensUsed: 50,
+          elapsedSeconds: 2,
+          iterations: 1,
+        },
+      },
+    };
+
+    const capability = await applyRunnerGoalPrpEvent(db, eventBinding, capabilityEvent);
+    expect(capability).toMatchObject({
+      capability: { availability: "available", verified: true },
+      revision: 1,
+    });
+    await expect(
+      applyRunnerGoalPrpEvent(db, eventBinding, capabilityEvent),
+    ).resolves.toBeNull();
+
+    const goal = await applyRunnerGoalPrpEvent(db, eventBinding, goalEvent);
+    expect(goal).toMatchObject({
+      goal: {
+        objective: "Project the durable provider goal",
+        status: "active",
+        workingNow: true,
+      },
+      revision: 2,
+    });
+    await expect(
+      applyRunnerGoalPrpEvent(db, eventBinding, goalEvent),
+    ).resolves.toBeNull();
+
+    const [session] = await db.select({
+      revision: agentTaskSessions.goalRevision,
+      sourceCursor: agentTaskSessions.goalSourceCursor,
+      capability: agentTaskSessions.goalCapabilityJson,
+      goal: agentTaskSessions.goalJson,
+    }).from(agentTaskSessions);
+    expect(session).toMatchObject({
+      revision: 2,
+      sourceCursor: 2,
+      capability: { availability: "available" },
+      goal: {
+        objective: "Project the durable provider goal",
+        status: "active",
+        workingNow: true,
+      },
+    });
   });
 
   it("blocks an unrecoverable active goal with a stable resumable reason", async () => {

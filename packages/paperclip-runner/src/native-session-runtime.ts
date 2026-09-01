@@ -90,6 +90,10 @@ export interface ExecuteNativeSessionOptions {
   existingSession?: NativeSession;
   persistedSession?: PersistedNativeSession | null;
   keepSessionOpen?: boolean;
+  /** Apply a structured session-goal control instead of starting an ordinary turn. */
+  sessionGoalControl?: NativeSessionGoalControl | null;
+  /** Resume the active durable session goal after a bounded heartbeat rollover. */
+  resumeSessionGoalHeartbeat?: boolean;
   onCheckpoint?: (
     snapshot: PersistedNativeSession,
     options?: CheckpointControlPlaneSessionOptions,
@@ -687,6 +691,10 @@ async function consumeTurn(
   quarantineSession: () => void,
   resolveGovernedWait?: ExecuteNativeSessionOptions["resolveGovernedWait"],
   externalSignal?: AbortSignal,
+  sessionGoal?: {
+    input: NativeExecutionInput;
+    requestId: string;
+  },
 ) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const appendAbort = new AbortController();
@@ -731,6 +739,7 @@ async function consumeTurn(
     let eventCount = 0;
     let highestContiguousSourceSeq = 0;
     let governedResult: PrpStructuredRunResult | null = null;
+    let goalControlObserved = false;
     while (true) {
       const next = await eventIterator.next();
       if (stopConsumer) throw new Error("native event consumer stopped");
@@ -865,6 +874,39 @@ async function consumeTurn(
             highestContiguousSourceSeq,
             governedResult,
           };
+        }
+      }
+      if (sessionGoal) {
+        const eventGoal = goalFromEvent(event);
+        if (payload.requestId === sessionGoal.requestId) {
+          goalControlObserved = true;
+        }
+        if (
+          goalControlObserved &&
+          eventGoal !== undefined &&
+          goalStatus(eventGoal) !== "active" &&
+          payload.workingNow !== true
+        ) {
+          return {
+            event,
+            eventCount,
+            highestContiguousSourceSeq,
+            governedResult: sessionGoalResult(
+              sessionGoal.input,
+              eventGoal,
+              `Provider session goal settled as ${goalStatus(eventGoal) ?? "cleared"}.`,
+            ),
+          };
+        }
+        if (isTurnTerminal(event)) {
+          if (!session.goal) throw new Error("native_session_goal_unavailable");
+          const authoritativeGoal = await session.goal({ action: "get" });
+          // `goal(get)` emits an authoritative goal snapshot. Keep consuming
+          // until that snapshot is durably appended so the server projection
+          // cannot lag behind the synthetic heartbeat result.
+          if (goalStatus(authoritativeGoal) === "active") continue;
+          goalControlObserved = true;
+          continue;
         }
       }
       if (isTurnTerminal(event)) {
@@ -1774,6 +1816,12 @@ export async function executeNativeSession(
               quarantineSession,
               options.resolveGovernedWait,
               consumptionAbort.signal,
+              options.sessionGoalControl || options.resumeSessionGoalHeartbeat
+                ? {
+                    input,
+                    requestId: options.sessionGoalControl?.requestId ?? `recovery_${input.binding.runId}`,
+                  }
+                : undefined,
             )
           : Promise.resolve({
               event: recoveryTerminal,
@@ -1789,13 +1837,25 @@ export async function executeNativeSession(
       // that later rejection becomes process-fatal under Node's strict policy.
       void consuming.catch(() => undefined);
       try {
-        if (
+        const shouldStartFreshTurn =
           !recovered ||
           (!recoveredActiveTurnId &&
             !adoptedDispositionTerminal &&
             !checkpointedDispositionTerminal &&
-            !dispositionRecoveryStillOwned)
-        ) {
+            !dispositionRecoveryStillOwned);
+        if (options.sessionGoalControl) {
+          // Explicit controls remain authoritative after controller loss. In
+          // particular, pause/clear/edit must reach a recovered session even
+          // while its provider turn is still active.
+          await applyNativeSessionGoalControl(session, options.sessionGoalControl);
+          await checkpoint();
+        } else if (options.resumeSessionGoalHeartbeat && shouldStartFreshTurn) {
+          await applyNativeSessionGoalControl(session, {
+            requestId: `recovery_${input.binding.runId}`,
+            action: "resume",
+          });
+          await checkpoint();
+        } else if (shouldStartFreshTurn) {
           const modelEnvelope = buildNativeModelEnvelope(input);
           const dispositionOnlyRecovery = Boolean(
             recovered &&

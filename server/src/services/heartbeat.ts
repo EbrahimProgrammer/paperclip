@@ -239,7 +239,6 @@ import {
 } from "./workspace-instance-cleanup.js";
 import { issueService } from "./issues.js";
 import {
-  applyRunnerGoalPrpEvent,
   blockRunnerGoalRecovery,
   failRunnerGoalAction,
   runnerGoalService,
@@ -20851,6 +20850,10 @@ export function heartbeatService(
                     backend:
                       options.nativeSessionBackendFactory?.(nativeExecution),
                     useRunnerd: agent.adapterType === "paperclip_runner",
+                    adapterType: agent.adapterType,
+                    sessionGoalControl,
+                    resumeSessionGoalHeartbeat:
+                      context.resumeSessionGoalHeartbeat === true,
                     onLog,
                     onEvent: onAdapterEvent,
                     preparationSpans: nativeRunnerPreparationSpans,

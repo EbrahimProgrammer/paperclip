@@ -17,7 +17,6 @@ import {
 } from "../../vendor/paperclip-runner/index.js";
 
 import { registerRunnerPrpAuthority } from "../../realtime/runner-prp-ws.js";
-import { applyRunnerGoalPrpEvent } from "../runner-goals.js";
 import { NativeRunCoordinatorStore } from "./native-run-coordinator-store.js";
 import {
   flushNativeQuestionResponses,

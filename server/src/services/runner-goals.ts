@@ -28,7 +28,7 @@ type TaskSession = typeof agentTaskSessions.$inferSelect;
 
 export class RunnerGoalConflictError extends Error {
   constructor(
-    readonly code: "stale_revision" | "replacement_required",
+    readonly code: "stale_revision" | "replacement_required" | "idempotency_key_conflict",
     readonly projection: RunnerGoalProjection,
   ) {
     super(code);
@@ -212,6 +212,24 @@ function pendingAction(action: string | null): RunnerGoalPendingAction | null {
   }
 }
 
+function isSameGoalActionRequest(
+  storedPayload: unknown,
+  request: RunnerGoalActionRequest,
+): boolean {
+  const stored = asRecord(storedPayload);
+  if (!stored) return false;
+  const storedTokenBudget = typeof stored.tokenBudget === "number" || stored.tokenBudget === null
+    ? stored.tokenBudget
+    : undefined;
+  return stored.requestId === request.requestId
+    && stored.agentId === request.agentId
+    && stored.expectedRevision === request.expectedRevision
+    && stored.action === request.action
+    && stored.objective === request.objective
+    && storedTokenBudget === request.tokenBudget
+    && (stored.confirmReplace === true) === (request.confirmReplace === true);
+}
+
 function commandSequence(request: RunnerGoalActionRequest) {
   if (request.action === "clear") {
     return [{ type: "session.goal.clear", payload: { requestId: request.requestId } }];
@@ -386,18 +404,6 @@ export function runnerGoalService(
       )).limit(1).for("update");
       if (!session) throw new RunnerGoalActionError("session_unavailable", "Agent task session is unavailable.");
 
-      const [existingAction] = await tx.select().from(agentSessionGoalActions).where(and(
-        eq(agentSessionGoalActions.sessionId, session.id),
-        eq(agentSessionGoalActions.requestId, request.requestId),
-      )).limit(1);
-      if (existingAction) {
-        return {
-          repeated: true,
-          session,
-          status: existingAction.status,
-          result: asRecord(existingAction.resultJson),
-        };
-      }
       const currentGoal = storedGoal(session);
       const currentProjection: RunnerGoalProjection = {
         ...initialProjection,
@@ -408,6 +414,22 @@ export function runnerGoalService(
         revision: session.goalRevision,
         observedAt: session.goalObservedAt?.toISOString() ?? null,
       };
+
+      const [existingAction] = await tx.select().from(agentSessionGoalActions).where(and(
+        eq(agentSessionGoalActions.sessionId, session.id),
+        eq(agentSessionGoalActions.requestId, request.requestId),
+      )).limit(1);
+      if (existingAction) {
+        if (!isSameGoalActionRequest(existingAction.payloadJson, request)) {
+          throw new RunnerGoalConflictError("idempotency_key_conflict", currentProjection);
+        }
+        return {
+          repeated: true,
+          session,
+          status: existingAction.status,
+          result: asRecord(existingAction.resultJson),
+        };
+      }
       if (session.goalRevision !== request.expectedRevision) {
         throw new RunnerGoalConflictError("stale_revision", currentProjection);
       }

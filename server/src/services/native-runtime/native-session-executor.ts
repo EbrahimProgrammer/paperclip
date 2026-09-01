@@ -93,6 +93,7 @@ import {
 } from "./native-run-trace.js";
 import { createNativeHarnessBackupStamp } from "./native-harness-backup-stamp.js";
 import { registerLiveRunnerGoalController } from "../runner-goal-control-broker.js";
+import { applyRunnerGoalPrpEvent } from "../runner-goals.js";
 
 type ActiveNativeSession = {
   session: NativeSession;
@@ -2725,6 +2726,8 @@ export async function executePaperclipNativeSession(input: {
   /** Test seam at the provider boundary; production always uses the package Codex backend. */
   backend?: NativeSessionBackend;
   useRunnerd?: boolean;
+  /** Paperclip adapter identity used to scope the durable goal projection. */
+  adapterType?: string;
   onLog?: (stream: "stdout" | "stderr", chunk: string) => Promise<void>;
   onEvent?: (event: AdapterRuntimeEvent) => Promise<void>;
   sessionGoalControl?: NativeSessionGoalControl | null;
@@ -3032,6 +3035,25 @@ export async function executePaperclipNativeSession(input: {
   const governedWaitObservation = createGovernedWaitEventObservation(
     resolvePendingGovernedWait,
   );
+  const projectSessionGoalEvent = (event: PrpEvent) =>
+    applyRunnerGoalPrpEvent(
+      input.db,
+      {
+        companyId: input.execution.binding.companyId,
+        issueId: input.execution.binding.issueId,
+        agentId: input.execution.binding.agentId,
+        adapterType:
+          input.adapterType ??
+          (input.useRunnerd ? "paperclip_runner" : "codex_local"),
+      },
+      {
+        eventType: event.eventType,
+        sourceInstanceId: event.sourceInstanceId,
+        sourceRunId: event.runId,
+        sourceSeq: event.sourceSeq,
+        payload: event.payload,
+      },
+    );
   const controlPlane = new PaperclipControlPlanePort(
     input.db,
     {
@@ -3047,6 +3069,7 @@ export async function executePaperclipNativeSession(input: {
     },
     {
       onCommittedEvent: async (event) => {
+        await projectSessionGoalEvent(event);
         const eventAtMs = Date.parse(event.emittedAt);
         const milestoneAtMs = Number.isFinite(eventAtMs)
           ? eventAtMs
@@ -3261,6 +3284,7 @@ export async function executePaperclipNativeSession(input: {
         // A crash can happen after the event commit but before its callback
         // finishes. Recover only idempotent durable projections here; activity,
         // publication, logging, trace, and metric effects remain committed-only.
+        await projectSessionGoalEvent(event);
         const questionFallback = await materializeRuntimeQuestionFallback({
           db: input.db,
           binding: input.execution.binding,
@@ -3459,6 +3483,8 @@ export async function executePaperclipNativeSession(input: {
             existingSession: existingWarmSession,
             persistedSession: persistedWarmSession,
             keepSessionOpen: warmSessionId !== null,
+            sessionGoalControl: input.sessionGoalControl,
+            resumeSessionGoalHeartbeat: input.resumeSessionGoalHeartbeat,
             onCheckpoint:
               warmSessionId !== null && warmConfigDigest !== null
                 ? async (snapshot) =>
