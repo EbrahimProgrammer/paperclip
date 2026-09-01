@@ -362,6 +362,7 @@ function mapNotificationBody(state: CodexSessionState, notification: CodexRpcNot
         return;
       }
       state.activeTurnId = turnId;
+      state.turnStartPending = false;
       state.turnStarted = true;
       state.emit(
         "turn.started",

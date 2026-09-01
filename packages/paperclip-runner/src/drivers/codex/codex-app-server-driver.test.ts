@@ -1861,6 +1861,56 @@ describe("Codex app-server Codex driver", () => {
     await session.close({ reason: "fixture complete" });
   });
 
+  it("rolls back only a definitely rejected idle goal autostart", async () => {
+    const definiteTransport = new FakeCodexTransport();
+    const definiteSession = await makeDriver([definiteTransport]).openSession({
+      runId: "run-goal-autostart-definite-rejection",
+      normalizedSessionId: "normalized-goal-autostart-definite-rejection",
+      workingDirectory: TEST_WORKING_DIRECTORY,
+    });
+    definiteTransport.rejectMethods.set(
+      "thread/goal/set",
+      new CodexRpcError('{"code":-32603,"message":"internal error"}', -32_603),
+    );
+    await expect(
+      definiteSession.goal?.({
+        action: "set",
+        objective: "Rejected before a turn starts",
+      }),
+    ).rejects.toBeInstanceOf(HarnessCapabilityUnavailableError);
+    definiteTransport.rejectMethods.delete("thread/goal/set");
+    await expect(
+      definiteSession.startTurn({
+        message: { role: "user", text: "A normal turn may still start." },
+      }),
+    ).resolves.toMatchObject({ turnId: "turn-1" });
+    await definiteSession.close({ reason: "fixture complete" });
+
+    const ambiguousTransport = new FakeCodexTransport();
+    const ambiguousSession = await makeDriver([ambiguousTransport]).openSession({
+      runId: "run-goal-autostart-ambiguous",
+      normalizedSessionId: "normalized-goal-autostart-ambiguous",
+      workingDirectory: TEST_WORKING_DIRECTORY,
+    });
+    ambiguousTransport.rejectMethods.set(
+      "thread/goal/set",
+      new Error("codex app-server transport closed"),
+    );
+    await expect(
+      ambiguousSession.goal?.({
+        action: "set",
+        objective: "The provider may have started this goal",
+      }),
+    ).rejects.toBeInstanceOf(HarnessCapabilityUnavailableError);
+    ambiguousTransport.rejectMethods.delete("thread/goal/set");
+    await expect(
+      ambiguousSession.startTurn({
+        message: { role: "user", text: "Do not create competing work." },
+      }),
+    ).rejects.toBeInstanceOf(HarnessCapabilityUnavailableError);
+    await ambiguousSession.close({ reason: "fixture complete" });
+  });
+
   it("preserves a provider-neutral goal action subset through the Codex transport facade", async () => {
     const transport = new FakeCodexTransport();
     const driver = makeDriver([transport], {

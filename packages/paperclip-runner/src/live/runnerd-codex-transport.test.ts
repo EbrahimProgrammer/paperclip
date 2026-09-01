@@ -14,6 +14,7 @@ import {
   type NativeRuntimeContextSnapshot,
 } from "../contracts/runtime-context.js";
 import { releaseMaterializedNativeRuntimeSkills } from "../drivers/runtime-context-materializer.js";
+import { CodexAppServerDriver } from "../drivers/codex/codex-app-server-driver.js";
 
 import {
   createCapabilityRunnerdCodexTransport,
@@ -774,6 +775,83 @@ it("controls a Codex session goal end to end through durable PRP v2", async () =
       bundle.transport.request("thread/goal/get", { threadId }),
     ).resolves.toEqual({ goal: null });
   } finally {
+    await bundle.transport.close();
+    await rm(stateDirectory, { recursive: true, force: true });
+  }
+  expect(bundle.evidence()).toMatchObject({
+    runnerExited: true,
+    runnerExitCode: 0,
+  });
+}, 30_000);
+
+it("binds an idle goal-autostarted turn through the full Codex harness", async () => {
+  const stateDirectory = await mkdtemp(join(tmpdir(), "runnerd-goal-harness-"));
+  const bundle = createCapabilityRunnerdCodexTransport({
+    runnerBinary: defaultCapabilityRunnerdBinary(),
+    codexCommand: fakeCodex,
+    codexArgs: fakeCodexArgs(stateDirectory, "--goal-autostart"),
+    stateDirectory,
+  });
+  const driver = new CodexAppServerDriver({
+    taskEnvelope: {
+      schema: "paperclip.skillless_task.v1",
+      objective: "Finish the durable goal harness test.",
+      completionContract: {
+        revision: "goal-harness-v1",
+        criteria: [{ id: "goal", requirement: "The goal turn starts." }],
+      },
+      constraints: [],
+      expectedResultSchema: "paperclip.run_result.v1",
+    },
+    approvalPolicy: "never",
+    includeCollaborationModeInstructions: false,
+    environment: {
+      PATH: process.env.PATH ?? "/usr/bin:/bin",
+      HOME: "/isolated/home",
+      CODEX_HOME: "/isolated/codex-home",
+      LANG: "C.UTF-8",
+    },
+    transportFactory: () => bundle.transport,
+    requireProviderSessionIdentity: true,
+  });
+  let session: Awaited<ReturnType<typeof driver.openSession>> | null = null;
+  try {
+    session = await driver.openSession({
+      runId: "run-goal-harness-autostart",
+      normalizedSessionId: "normalized-goal-harness-autostart",
+      workingDirectory: tmpdir(),
+    });
+    const observed: Array<{ eventType: string }> = [];
+    const turnStarted = Promise.race([
+      (async () => {
+        for await (const event of session!.events()) {
+          observed.push(event);
+          if (event.eventType === "turn.started") return event;
+          if (event.eventType === "session.failed") {
+            throw new Error(`goal autostart failed: ${JSON.stringify(event.payload)}`);
+          }
+        }
+        throw new Error("goal autostart event stream closed");
+      })(),
+      new Promise<never>((_resolve, reject) => {
+        setTimeout(() => reject(new Error("goal autostart timed out")), 5_000);
+      }),
+    ]);
+    await expect(
+      session.goal?.({
+        action: "set",
+        objective: "Finish the durable goal harness test.",
+        status: "active",
+        requestId: "goal-harness-autostart",
+      }),
+    ).resolves.toMatchObject({ status: "active" });
+    await expect(turnStarted).resolves.toMatchObject({
+      eventType: "turn.started",
+      turnId: "provider-goal-turn-1",
+    });
+    expect(observed.some((event) => event.eventType === "session.failed")).toBe(false);
+  } finally {
+    await session?.close();
     await bundle.transport.close();
     await rm(stateDirectory, { recursive: true, force: true });
   }

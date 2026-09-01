@@ -458,6 +458,18 @@ export class CodexHarnessSession extends CodexSessionState implements HarnessSes
         "capability action not advertised",
       );
     }
+    const expectsIdleAutostart =
+      this.activeTurnId === null
+      && !this.turnStartPending
+      && (input.action === "resume"
+        || (input.action === "set" && (input.status ?? "active") === "active"));
+    if (expectsIdleAutostart) {
+      // Codex activates an idle goal by starting a provider turn without a
+      // turn/start response. Keep the expectation armed until turn/started
+      // supplies the authoritative turn id; the notification may arrive
+      // after thread/goal/set has already returned.
+      this.turnStartPending = true;
+    }
     let method: string;
     let params: Record<string, unknown> = { threadId: this.opened.threadId };
     if (input.action === "get") {
@@ -520,6 +532,12 @@ export class CodexHarnessSession extends CodexSessionState implements HarnessSes
       );
       return goal === null ? null : structuredClone(goal);
     } catch (error) {
+      if (expectsIdleAutostart && error instanceof CodexRpcError) {
+        // A JSON-RPC error is a definite provider rejection. Transport and
+        // protocol failures are ambiguous and deliberately retain the pending
+        // start so another command cannot create competing provider work.
+        this.turnStartPending = false;
+      }
       throw this.unsupported(`goal ${input.action}`, error);
     }
   }
