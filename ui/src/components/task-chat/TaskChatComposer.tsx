@@ -149,12 +149,12 @@ function normalizeRunnerGoalCommandText(value: string): string {
   // exact whole-document shape it generates so the action still cannot fall
   // through as a comment. Ordinary Markdown links remain ordinary comments.
   const relativeAutolink = trimmed.match(
-    /^\[\/go(?:al)?[ \t\u00a0]*\]\(<(\/goal(?:[ \t\u00a0].*)?)>\)$/s,
+    /^\[\/(?:go(?:al)?)?[ \t\u00a0]*\]\(<(\/goal(?:[ \t\u00a0].*)?)>\)$/s,
   );
   if (relativeAutolink) return relativeAutolink[1]!.replaceAll("\u00a0", " ");
 
   const encodedAutolink = trimmed.match(
-    /^\[\/go(?:al)?[ \t\u00a0]*\]\((\/goal(?:%20|%C2%A0).*)\)$/s,
+    /^\[\/(?:go(?:al)?)?[ \t\u00a0]*\]\((\/goal(?:%20|%C2%A0).*)\)$/s,
   );
   if (encodedAutolink) {
     try {

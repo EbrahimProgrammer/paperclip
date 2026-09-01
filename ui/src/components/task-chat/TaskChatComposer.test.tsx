@@ -808,6 +808,15 @@ describe("TaskChatComposer", () => {
         },
       });
       expect(
+        parseRunnerGoalCommand("[/](/goal%20Confirm%20the%20goal%20state.)"),
+      ).toEqual({
+        matched: true,
+        command: {
+          action: "create",
+          objective: "Confirm the goal state.",
+        },
+      });
+      expect(
         parseRunnerGoalCommand("[/goal](/goal%20pause)"),
       ).toEqual({ matched: true, command: { action: "pause" } });
       expect(parseRunnerGoalCommand("/goal pause extra")).toEqual({
