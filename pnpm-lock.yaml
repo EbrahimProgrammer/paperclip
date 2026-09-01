@@ -14,13 +14,13 @@ patchedDependencies:
     hash: fymctidcjqjhi4cj72qtivlxry
     path: patches/@agentclientprotocol__claude-agent-acp@0.70.0.patch
   '@agentclientprotocol/codex-acp@1.6.2':
-    hash: ip2vlcoqgm3spb76ssbhpqff4u
+    hash: grbydorkxatbzksnwwfuawwtim
     path: patches/@agentclientprotocol__codex-acp@1.6.2.patch
   acpx@0.12.0:
     hash: b2ggqg6aj4hdob4whk6vq6jmc4
     path: patches/acpx@0.12.0.patch
   acpx@0.13.1:
-    hash: kony4y34rhcebxwuonhjz4nxay
+    hash: lzpwjtiaybzoijy455dfycwavu
     path: patches/acpx@0.13.1.patch
   embedded-postgres@18.1.0-beta.16:
     hash: 55uhvnotpqyiy37rn3pqpukhei
@@ -173,7 +173,7 @@ importers:
     dependencies:
       '@agentclientprotocol/codex-acp':
         specifier: ^1.6.2
-        version: 1.6.2(patch_hash=ip2vlcoqgm3spb76ssbhpqff4u)
+        version: 1.6.2(patch_hash=grbydorkxatbzksnwwfuawwtim)
       '@paperclipai/adapter-utils':
         specifier: workspace:*
         version: link:../../adapter-utils
@@ -476,10 +476,10 @@ importers:
         version: 0.70.0(patch_hash=fymctidcjqjhi4cj72qtivlxry)(@anthropic-ai/sdk@0.121.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))
       '@agentclientprotocol/codex-acp':
         specifier: 1.6.2
-        version: 1.6.2(patch_hash=ip2vlcoqgm3spb76ssbhpqff4u)
+        version: 1.6.2(patch_hash=grbydorkxatbzksnwwfuawwtim)
       acpx:
         specifier: 0.13.1
-        version: 0.13.1(patch_hash=kony4y34rhcebxwuonhjz4nxay)
+        version: 0.13.1(patch_hash=lzpwjtiaybzoijy455dfycwavu)
       ajv:
         specifier: ^8.20.0
         version: 8.20.0
@@ -895,7 +895,7 @@ importers:
         version: 0.6.1(better-auth@1.7.0(@opentelemetry/api@1.9.1)(drizzle-kit@0.31.10)(drizzle-orm@0.45.2(@opentelemetry/api@1.9.1)(kysely@0.29.5)(pg@8.18.0)(postgres@3.4.9))(pg@8.18.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(vitest@4.1.10(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(jsdom@30.0.1(@noble/hashes@2.3.0))(tsx@4.23.12)))
       acpx:
         specifier: 0.13.1
-        version: 0.13.1(patch_hash=kony4y34rhcebxwuonhjz4nxay)
+        version: 0.13.1(patch_hash=lzpwjtiaybzoijy455dfycwavu)
       ajv:
         specifier: ^8.20.0
         version: 8.20.0
@@ -7148,6 +7148,7 @@ packages:
 
   opencode-ai@1.18.17:
     resolution: {integrity: sha512-Pc2D3Y6iQ3BAjcKw9E+9J7VTWNazIwFknFfrolufMCrJ0FLxOIZfndoHmJrx4x1oqpK2CPAqK9D2V6nsp6Oebw==}
+    cpu: [arm64, x64]
     os: [darwin, linux, win32]
     hasBin: true
 
@@ -8472,7 +8473,7 @@ snapshots:
       - '@anthropic-ai/sdk'
       - '@modelcontextprotocol/sdk'
 
-  '@agentclientprotocol/codex-acp@1.6.2(patch_hash=ip2vlcoqgm3spb76ssbhpqff4u)':
+  '@agentclientprotocol/codex-acp@1.6.2(patch_hash=grbydorkxatbzksnwwfuawwtim)':
     dependencies:
       '@agentclientprotocol/sdk': 1.4.0(zod@4.4.3)
       '@openai/codex': 0.148.0
@@ -12437,7 +12438,7 @@ snapshots:
       - bare-buffer
       - react-native-b4a
 
-  acpx@0.13.1(patch_hash=kony4y34rhcebxwuonhjz4nxay):
+  acpx@0.13.1(patch_hash=lzpwjtiaybzoijy455dfycwavu):
     dependencies:
       '@agentclientprotocol/sdk': 1.4.0(zod@4.4.3)
       commander: 15.0.0
