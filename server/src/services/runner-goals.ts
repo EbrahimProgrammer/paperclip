@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
@@ -720,37 +721,14 @@ export async function applyRunnerGoalPrpEvent(
           status: "blocked",
           workingNow: false,
           lastReason: "provider_session_goal_missing_after_resume",
-          updatedAt: new Date().toISOString(),
+          updatedAt: persistedGoal.status === "blocked" &&
+              persistedGoal.lastReason === "provider_session_goal_missing_after_resume"
+            ? persistedGoal.updatedAt
+            : new Date().toISOString(),
         };
       }
     }
-    const update: Partial<typeof agentTaskSessions.$inferInsert> = {
-      goalSourceCursor: event.sourceSeq,
-      ...(sourceId ? { goalSourceId: sourceId } : {}),
-      goalRevision: session.goalRevision + 1,
-      goalObservedAt: new Date(),
-      updatedAt: new Date(),
-    };
-    if (capability) {
-      update.goalCapabilityJson = capability;
-    }
-    if ((!providerError && event.eventType.startsWith("session.goal.")) || (turnLifecycleEvent && goal)) {
-      update.goalJson = goal as unknown as Record<string, unknown> | null;
-      update.goalStatus = goal?.status ?? null;
-      if (event.eventType === "session.goal.cleared" || goal?.status === "complete") {
-        update.goalDesiredState = null;
-      } else if (goal?.status === "active") {
-        update.goalDesiredState = "active";
-      } else if (goal?.status === "paused") {
-        update.goalDesiredState = "paused";
-      } else if (goal) {
-        // Blocked and limited goals remain resumable, but must not be picked
-        // up by the automatic active-goal recovery sweep until a user resumes.
-        update.goalDesiredState = "paused";
-      }
-    }
-    await tx.update(agentTaskSessions).set(update).where(eq(agentTaskSessions.id, session.id));
-
+    let completedPendingActionId: string | null = null;
     if (event.eventType === "session.goal.updated" || event.eventType === "session.goal.cleared") {
       const requestId = typeof payload.requestId === "string" ? payload.requestId : null;
       const [pending] = requestId
@@ -768,13 +746,56 @@ export async function applyRunnerGoalPrpEvent(
           ? pending.action !== "clear"
           : pending.action === "clear"
       );
-      if (pending && matches) {
-        await tx.update(agentSessionGoalActions).set({
-          status: "completed",
-          completedAt: new Date(),
-          updatedAt: new Date(),
-        }).where(eq(agentSessionGoalActions.id, pending.id));
-      }
+      if (pending && matches) completedPendingActionId = pending.id;
+    }
+    const writesGoal =
+      (!providerError && event.eventType.startsWith("session.goal.")) ||
+      (turnLifecycleEvent && goal);
+    const nextDesiredState = !writesGoal
+      ? session.goalDesiredState
+      : event.eventType === "session.goal.cleared" || goal?.status === "complete"
+        ? null
+        : goal?.status === "active"
+          ? "active"
+          : goal
+            ? "paused"
+            : session.goalDesiredState;
+    const projectionChanged =
+      providerError ||
+      (capability !== null && !isDeepStrictEqual(asRecord(session.goalCapabilityJson), capability)) ||
+      (Boolean(writesGoal) && !isDeepStrictEqual(storedGoal(session), goal)) ||
+      nextDesiredState !== session.goalDesiredState ||
+      completedPendingActionId !== null;
+    const observedAt = new Date();
+    const update: Partial<typeof agentTaskSessions.$inferInsert> = {
+      goalSourceCursor: event.sourceSeq,
+      ...(sourceId ? { goalSourceId: sourceId } : {}),
+      goalObservedAt: observedAt,
+      updatedAt: observedAt,
+    };
+    if (!projectionChanged) {
+      await tx.update(agentTaskSessions).set(update).where(eq(agentTaskSessions.id, session.id));
+      return false;
+    }
+    update.goalRevision = session.goalRevision + 1;
+    if (capability) {
+      update.goalCapabilityJson = capability;
+    }
+    if (writesGoal) {
+      update.goalJson = goal as unknown as Record<string, unknown> | null;
+      update.goalStatus = goal?.status ?? null;
+      // Blocked and limited goals remain resumable, but must not be picked up
+      // by the automatic active-goal recovery sweep until a user resumes.
+      update.goalDesiredState = nextDesiredState;
+    }
+    await tx.update(agentTaskSessions).set(update).where(eq(agentTaskSessions.id, session.id));
+
+    if (completedPendingActionId) {
+      await tx.update(agentSessionGoalActions).set({
+        status: "completed",
+        completedAt: observedAt,
+        updatedAt: observedAt,
+      }).where(eq(agentSessionGoalActions.id, completedPendingActionId));
     }
     return true;
   });

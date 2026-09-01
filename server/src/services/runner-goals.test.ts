@@ -345,6 +345,12 @@ describeEmbeddedPostgres("runner goal service", () => {
     await expect(
       applyRunnerGoalPrpEvent(db, eventBinding, goalEvent),
     ).resolves.toBeNull();
+    await expect(
+      applyRunnerGoalPrpEvent(db, eventBinding, {
+        ...goalEvent,
+        sourceSeq: 3,
+      }),
+    ).resolves.toBeNull();
 
     const [session] = await db.select({
       revision: agentTaskSessions.goalRevision,
@@ -354,7 +360,7 @@ describeEmbeddedPostgres("runner goal service", () => {
     }).from(agentTaskSessions);
     expect(session).toMatchObject({
       revision: 2,
-      sourceCursor: 2,
+      sourceCursor: 3,
       capability: { availability: "available" },
       goal: {
         objective: "Project the durable provider goal",
