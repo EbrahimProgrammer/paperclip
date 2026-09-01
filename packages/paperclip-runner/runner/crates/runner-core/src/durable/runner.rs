@@ -262,14 +262,29 @@ pub fn run_durable_runner<E: CommandExecutor>(
             // mutually authenticated secure welcome exchanges it for a lease.
             bootstrap_ticket.take();
         }
+        let protocol_version = welcome.connection.protocol_version;
+        let upgrading_from_v1 =
+            protocol_version >= 2 && state.last_connection_protocol_version == Some(1);
         if let Some(acked_source_seq) = welcome.acked_source_seq {
-            state.apply_ack(acked_source_seq)?;
+            // A v2 welcome immediately following a v1 connection reports the
+            // shared cumulative cursor, including redacted placeholders. Do
+            // not interpret that cursor as acknowledgement of their native v2
+            // payloads; those are restored below with fresh source sequences.
+            let acknowledgement_protocol = if upgrading_from_v1 {
+                1
+            } else {
+                protocol_version
+            };
+            state.apply_ack(acked_source_seq, acknowledgement_protocol)?;
         }
+        if protocol_version >= 2 {
+            state.restore_v2_replay_events(&config)?;
+        }
+        state.last_connection_protocol_version = Some(protocol_version);
         state.lifecycle = "ready".to_owned();
         state.recoverable_failure = None;
         store.save(&state)?;
         let mut sent_source_seq = state.acked_source_seq;
-        let protocol_version = welcome.connection.protocol_version;
 
         let mut lifecycle_after_reply = CommandLifecycle::Continue;
         let mut disconnected = false;
@@ -370,7 +385,7 @@ pub fn run_durable_runner<E: CommandExecutor>(
                         .pointer("/payload/ackedSourceSeq")
                         .and_then(Value::as_u64)
                         .ok_or_else(|| DurableRunnerError::invalid("ACK cursor is required"))?;
-                    state.apply_ack(acked)?;
+                    state.apply_ack(acked, connection.protocol_version)?;
                     store.save(&state)?;
                 }
                 Some("command") => {
@@ -837,7 +852,7 @@ mod tests {
         assert_eq!(state.outbox.len(), 1);
         assert_eq!(executor.events.len(), 1);
         state
-            .apply_ack(1)
+            .apply_ack(1, 2)
             .expect("controller ACK removes the durable outbox copy");
         store.save(&state).unwrap();
 

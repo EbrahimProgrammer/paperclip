@@ -19,6 +19,7 @@ const MAX_RECENT_COMMANDS: usize = 128;
 const MAX_DIAGNOSTICS: usize = 32;
 const MAX_COMMAND_RESULT_BYTES: usize = 64 * 1024;
 const MAX_EXECUTOR_EVENT_RECEIPTS: usize = 256;
+const MAX_V2_REPLAY_EVENTS: usize = 2;
 const STATE_OVERHEAD_BYTES: usize = 16 * 1024 * 1024;
 const TEMP_FILE_ATTEMPTS: usize = 32;
 
@@ -37,6 +38,16 @@ impl EventPriority {
             Self::P1 => 1,
             Self::P2 => 2,
         }
+    }
+}
+
+fn v2_replay_key(event_type: &str) -> Option<&'static str> {
+    match event_type {
+        "session.capabilities.updated" => Some("session.capabilities"),
+        "session.goal.snapshot" | "session.goal.updated" | "session.goal.cleared" => {
+            Some("session.goal")
+        }
+        _ => None,
     }
 }
 
@@ -155,6 +166,15 @@ pub struct StoredOutboxEvent {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct StoredV2ReplayEvent {
+    pub source_seq: u64,
+    pub priority: u8,
+    pub event_type: String,
+    pub payload: Value,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StoredCommandResult {
     pub command_id: String,
     pub controller_seq: u64,
@@ -202,6 +222,10 @@ pub struct DurableState {
     pub processed_command_fingerprints: BTreeMap<String, String>,
     #[serde(default)]
     executor_event_receipts: BTreeMap<String, ExecutorEventReceipt>,
+    #[serde(default)]
+    v2_replay_events: BTreeMap<String, StoredV2ReplayEvent>,
+    #[serde(default)]
+    pub last_connection_protocol_version: Option<u64>,
     pub diagnostics: Vec<String>,
     pub backpressure: bool,
     pub recoverable_failure: Option<String>,
@@ -230,6 +254,8 @@ impl DurableState {
             processed_commands: BTreeMap::new(),
             processed_command_fingerprints: BTreeMap::new(),
             executor_event_receipts: BTreeMap::new(),
+            v2_replay_events: BTreeMap::new(),
+            last_connection_protocol_version: None,
             diagnostics: Vec::new(),
             backpressure: false,
             recoverable_failure: None,
@@ -454,15 +480,30 @@ impl DurableState {
         self.outbox.push(StoredOutboxEvent {
             source_seq,
             priority: priority.number(),
-            event_type,
+            event_type: event_type.clone(),
             envelope,
             byte_size,
         });
+        if let Some(replay_key) = v2_replay_key(&event_type) {
+            self.v2_replay_events.insert(
+                replay_key.to_owned(),
+                StoredV2ReplayEvent {
+                    source_seq,
+                    priority: priority.number(),
+                    event_type,
+                    payload: sanitize_value(&payload),
+                },
+            );
+        }
         self.peak_outbox_bytes = self.peak_outbox_bytes.max(projected);
         Ok(source_seq)
     }
 
-    pub fn apply_ack(&mut self, acked_source_seq: u64) -> Result<(), DurableRunnerError> {
+    pub fn apply_ack(
+        &mut self,
+        acked_source_seq: u64,
+        protocol_version: u64,
+    ) -> Result<(), DurableRunnerError> {
         if acked_source_seq < self.acked_source_seq {
             return Err(DurableRunnerError::invalid(
                 "cumulative ACK cannot move behind the durable cursor",
@@ -476,6 +517,10 @@ impl DurableState {
         self.acked_source_seq = acked_source_seq;
         self.outbox
             .retain(|event| event.source_seq > acked_source_seq);
+        if protocol_version >= 2 {
+            self.v2_replay_events
+                .retain(|_, event| event.source_seq > acked_source_seq);
+        }
         if self.backpressure
             && self.outbox_bytes() < self.max_outbox_bytes.saturating_sub(self.p0_reserve_bytes)
         {
@@ -483,6 +528,32 @@ impl DurableState {
             if self.lifecycle == "backpressure" {
                 self.lifecycle = "ready".to_owned();
             }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn restore_v2_replay_events(
+        &mut self,
+        config: &DurableRunnerConfig,
+    ) -> Result<(), DurableRunnerError> {
+        let replay = self
+            .v2_replay_events
+            .values()
+            .filter(|event| event.source_seq <= self.acked_source_seq)
+            .cloned()
+            .collect::<Vec<_>>();
+        for event in replay {
+            let priority = match event.priority {
+                0 => EventPriority::P0,
+                1 => EventPriority::P1,
+                2 => EventPriority::P2,
+                _ => {
+                    return Err(DurableRunnerError::invalid(
+                        "v2 replay event priority is invalid",
+                    ));
+                }
+            };
+            self.enqueue_event(config, event.event_type, priority, event.payload)?;
         }
         Ok(())
     }
@@ -1042,6 +1113,21 @@ fn validate_binding(
                     && receipt.source_seq <= state.highest_source_seq()
                     && executor_receipt_sequences.insert(receipt.source_seq)
             });
+    let v2_replay_events_are_valid = state.v2_replay_events.len() <= MAX_V2_REPLAY_EVENTS
+        && state.v2_replay_events.iter().all(|(key, replay)| {
+            v2_replay_key(&replay.event_type) == Some(key.as_str())
+                && replay.source_seq > 0
+                && replay.source_seq <= state.highest_source_seq()
+                && replay.priority <= 2
+                && replay.payload.is_object()
+                && (replay.source_seq <= state.acked_source_seq
+                    || state.outbox.iter().any(|event| {
+                        event.source_seq == replay.source_seq
+                            && event.priority == replay.priority
+                            && event.event_type == replay.event_type
+                            && event.envelope.pointer("/payload/payload") == Some(&replay.payload)
+                    }))
+        });
     command_sequences.sort_unstable();
     let command_cursors_are_valid = match (command_sequences.first(), command_sequences.last()) {
         (None, None) => state.compacted_through_controller_seq == state.last_controller_command_seq,
@@ -1068,6 +1154,10 @@ fn validate_binding(
         || !command_cursors_are_valid
         || !command_fingerprints_are_valid
         || !executor_event_receipts_are_valid
+        || !v2_replay_events_are_valid
+        || state
+            .last_connection_protocol_version
+            .is_some_and(|version| !(1..=PROTOCOL_VERSION).contains(&version))
     {
         return Err(DurableRunnerError::invalid(
             "durable state cursors, bounds, or journals are inconsistent",
@@ -1375,10 +1465,10 @@ mod tests {
         state
             .enqueue_event(&config, "runner.reconnected", EventPriority::P1, json!({}))
             .unwrap();
-        state.apply_ack(1).unwrap();
+        state.apply_ack(1, 2).unwrap();
         assert_eq!(state.outbox.len(), 1);
-        assert!(state.apply_ack(0).is_err());
-        assert!(state.apply_ack(3).is_err());
+        assert!(state.apply_ack(0, 2).is_err());
+        assert!(state.apply_ack(3, 2).is_err());
     }
 
     #[test]
@@ -1401,6 +1491,44 @@ mod tests {
             state.outbox[0].envelope.pointer("/payload/schemaVersion"),
             Some(&json!(2)),
         );
+    }
+
+    #[test]
+    fn v1_acknowledgement_replays_latest_goal_state_for_v2() {
+        let config = config(PathBuf::from("unused"));
+        let mut state = DurableState::new(&config);
+        state
+            .enqueue_event(
+                &config,
+                "session.goal.updated",
+                EventPriority::P0,
+                json!({"goal": {"objective": "durable objective", "status": "active"}}),
+            )
+            .unwrap();
+
+        state.apply_ack(1, 1).unwrap();
+        assert!(state.outbox.is_empty());
+        assert_eq!(state.v2_replay_events["session.goal"].source_seq, 1);
+        validate_binding(&state, &config, false).unwrap();
+
+        state.restore_v2_replay_events(&config).unwrap();
+        assert_eq!(state.outbox.len(), 1);
+        assert_eq!(state.outbox[0].source_seq, 2);
+        assert_eq!(
+            state.outbox[0].envelope.pointer("/payload/eventType"),
+            Some(&json!("session.goal.updated")),
+        );
+        assert_eq!(
+            state.outbox[0]
+                .envelope
+                .pointer("/payload/payload/goal/objective"),
+            Some(&json!("durable objective")),
+        );
+
+        state.apply_ack(2, 2).unwrap();
+        assert!(state.outbox.is_empty());
+        assert!(state.v2_replay_events.is_empty());
+        validate_binding(&state, &config, false).unwrap();
     }
 
     #[test]
