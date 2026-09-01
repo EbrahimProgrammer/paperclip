@@ -193,7 +193,13 @@ describeEmbeddedPostgres("runner goal service", () => {
         },
       },
     });
-    expect(failedClear).toMatchObject({
+    expect(failedClear).toBeNull();
+    const afterFailedClear = await service.projection(
+      binding.companyId,
+      binding.issueId,
+      binding.agentId,
+    );
+    expect(afterFailedClear).toMatchObject({
       goal: { objective: "Finish the goal across turns", status: "active" },
     });
 
@@ -201,7 +207,7 @@ describeEmbeddedPostgres("runner goal service", () => {
     const clearAccepted = await service.act(binding.companyId, binding.issueId, {
       requestId: clearRequestId,
       agentId: binding.agentId,
-      expectedRevision: failedClear!.revision,
+      expectedRevision: afterFailedClear!.revision,
       action: "clear",
     });
     expect(clearAccepted.projection.pendingAction).toBe("clearing");
@@ -248,6 +254,21 @@ describeEmbeddedPostgres("runner goal service", () => {
       },
     });
     expect(first).toMatchObject({ goal: { status: "complete" } });
+    await expect(applyRunnerGoalPrpEvent(db, {
+      ...binding,
+      adapterType: "paperclip_runner",
+    }, {
+      eventType: "session.goal.snapshot",
+      sourceInstanceId: "durable-runner",
+      sourceRunId: "heartbeat-run-a",
+      sourceSeq: 10,
+      payload: { goal: null },
+    })).resolves.toBeNull();
+    await expect(runnerGoalService(db).projection(
+      binding.companyId,
+      binding.issueId,
+      binding.agentId,
+    )).resolves.toMatchObject({ revision: 1, goal: { status: "complete" } });
 
     const successor = await applyRunnerGoalPrpEvent(db, {
       ...binding,

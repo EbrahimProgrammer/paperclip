@@ -714,10 +714,11 @@ export async function applyRunnerGoalPrpEvent(
       const alreadyBlockedForMissingProviderGoal =
         persistedGoal?.status === "blocked" &&
         persistedGoal.lastReason === "provider_session_goal_missing_after_resume";
-      if (
-        persistedGoal &&
-        (session.goalDesiredState === "active" || alreadyBlockedForMissingProviderGoal)
-      ) {
+      if (persistedGoal?.status === "complete") {
+        // Completed goals remain visible until an explicit clear or
+        // replacement. An empty resume snapshot is not a clear event.
+        goal = persistedGoal;
+      } else if (persistedGoal) {
         goal = {
           ...persistedGoal,
           status: "blocked",
@@ -730,7 +731,10 @@ export async function applyRunnerGoalPrpEvent(
       }
     }
     let completedPendingActionId: string | null = null;
-    if (event.eventType === "session.goal.updated" || event.eventType === "session.goal.cleared") {
+    if (
+      !providerError &&
+      (event.eventType === "session.goal.updated" || event.eventType === "session.goal.cleared")
+    ) {
       const requestId = typeof payload.requestId === "string" ? payload.requestId : null;
       const [pending] = requestId
         ? await tx.select({
@@ -762,7 +766,6 @@ export async function applyRunnerGoalPrpEvent(
             ? "paused"
             : session.goalDesiredState;
     const projectionChanged =
-      providerError ||
       (capability !== null && !isDeepStrictEqual(asRecord(session.goalCapabilityJson), capability)) ||
       (Boolean(writesGoal) && !isDeepStrictEqual(storedGoal(session), goal)) ||
       nextDesiredState !== session.goalDesiredState ||
