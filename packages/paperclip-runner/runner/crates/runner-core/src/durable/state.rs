@@ -59,9 +59,18 @@ pub struct Command {
 
 impl Command {
     pub fn validate(&self) -> Result<(), DurableRunnerError> {
-        if self.schema != "paperclip.prp.command.v1" {
+        let schema_version = match self.schema.as_str() {
+            "paperclip.prp.command.v1" => 1,
+            "paperclip.prp.command.v2" => 2,
+            _ => {
+                return Err(DurableRunnerError::invalid(
+                    "command requires a supported paperclip.prp.command schema",
+                ));
+            }
+        };
+        if schema_version == 1 && self.command_type.starts_with("session.goal.") {
             return Err(DurableRunnerError::invalid(
-                "command requires the paperclip.prp.command.v1 schema",
+                "session goal commands require the paperclip.prp.command.v2 schema",
             ));
         }
         if self.command_id.is_empty()
@@ -122,10 +131,13 @@ impl Command {
                 | "runner.drain"
                 | "runner.suspend"
                 | "runner.shutdown"
+                | "session.goal.get"
+                | "session.goal.set"
+                | "session.goal.clear"
         ) {
-            return Err(DurableRunnerError::invalid(
-                "command type is not supported by PRP v1",
-            ));
+            return Err(DurableRunnerError::invalid(format!(
+                "command type is not supported by PRP v{schema_version}"
+            )));
         }
         Ok(())
     }
@@ -368,6 +380,17 @@ impl DurableState {
 
         let source_seq = self.next_source_seq;
         let emitted_at = current_timestamp()?;
+        let schema_version = if matches!(
+            event_type.as_str(),
+            "session.capabilities.updated"
+                | "session.goal.snapshot"
+                | "session.goal.updated"
+                | "session.goal.cleared"
+        ) {
+            2
+        } else {
+            1
+        };
         let envelope = json!({
             "protocol": PROTOCOL,
             "version": PROTOCOL_VERSION,
@@ -379,7 +402,7 @@ impl DurableState {
             "turnId": self.turn_id,
             "itemId": self.item_id,
             "payload": {
-                "schema": "paperclip.prp.event.v1",
+                "schema": format!("paperclip.prp.event.v{schema_version}"),
                 "sourceEventId": source_event_id,
                 "sourceSeq": source_seq,
                 "sourceInstanceId": self.runner_instance_id,
@@ -389,7 +412,7 @@ impl DurableState {
                 "turnId": self.turn_id,
                 "itemId": self.item_id,
                 "eventType": event_type,
-                "schemaVersion": 1,
+                "schemaVersion": schema_version,
                 "priority": priority.number(),
                 "emittedAt": emitted_at,
                 "payload": sanitize_value(&payload),
@@ -1061,6 +1084,9 @@ fn sensitive_key(key: &str) -> bool {
             | "cachewritetokens"
             | "pretokens"
             | "posttokens"
+            | "tokenbudgetcontrol"
+            | "tokenbudget"
+            | "tokensused"
     ) {
         return false;
     }
@@ -1229,6 +1255,15 @@ mod tests {
         }
     }
 
+    #[test]
+    fn session_goal_commands_require_and_accept_the_v2_schema() {
+        let mut goal = command("goal-command", 1);
+        goal.command_type = "session.goal.set".to_owned();
+        assert!(goal.validate().is_err());
+        goal.schema = "paperclip.prp.command.v2".to_owned();
+        assert!(goal.validate().is_ok());
+    }
+
     fn temporary_directory(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
             "paperclip-runner-durable-{label}-{}",
@@ -1250,6 +1285,28 @@ mod tests {
         assert_eq!(state.outbox.len(), 1);
         assert!(state.apply_ack(0).is_err());
         assert!(state.apply_ack(3).is_err());
+    }
+
+    #[test]
+    fn session_goal_events_use_the_prp_v2_event_schema() {
+        let config = config(PathBuf::from("unused"));
+        let mut state = DurableState::new(&config);
+        state
+            .enqueue_event(
+                &config,
+                "session.goal.snapshot",
+                EventPriority::P0,
+                json!({"goal": null}),
+            )
+            .unwrap();
+        assert_eq!(
+            state.outbox[0].envelope.pointer("/payload/schema"),
+            Some(&json!("paperclip.prp.event.v2")),
+        );
+        assert_eq!(
+            state.outbox[0].envelope.pointer("/payload/schemaVersion"),
+            Some(&json!(2)),
+        );
     }
 
     #[test]
@@ -1356,6 +1413,20 @@ mod tests {
             sanitized["nested"]["authorizationBoundary"],
             json!("[REDACTED]")
         );
+    }
+
+    #[test]
+    fn goal_usage_fields_are_not_mistaken_for_credentials() {
+        let sanitized = sanitize_value(&json!({
+            "tokenBudgetControl": true,
+            "tokenBudget": 4096,
+            "tokensUsed": 128,
+            "accessToken": "secret-value",
+        }));
+        assert_eq!(sanitized["tokenBudgetControl"], json!(true));
+        assert_eq!(sanitized["tokenBudget"], json!(4096));
+        assert_eq!(sanitized["tokensUsed"], json!(128));
+        assert_eq!(sanitized["accessToken"], json!("[REDACTED]"));
     }
 
     #[test]

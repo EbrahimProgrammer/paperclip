@@ -12,7 +12,7 @@ use super::transport::{
     current_unix_ms, validate_control_identity, AuthenticatedTransport, ConnectionMetadata,
     LeaseCredential, RunnerTransportEndpoint,
 };
-use super::{BootstrapTicket, DurableRunnerConfig, DurableRunnerError, PROTOCOL, PROTOCOL_VERSION};
+use super::{BootstrapTicket, DurableRunnerConfig, DurableRunnerError, PROTOCOL};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CommandExecution {
@@ -269,6 +269,7 @@ pub fn run_durable_runner<E: CommandExecutor>(
         state.recoverable_failure = None;
         store.save(&state)?;
         let mut sent_source_seq = state.acked_source_seq;
+        let protocol_version = welcome.connection.protocol_version;
 
         let mut lifecycle_after_reply = CommandLifecycle::Continue;
         let mut disconnected = false;
@@ -276,13 +277,23 @@ pub fn run_durable_runner<E: CommandExecutor>(
             let (result, lifecycle) =
                 process_command(&mut state, &store, &config, &mut executor, &command)?;
             lifecycle_after_reply = lifecycle_after_reply.merge(lifecycle);
-            if let Err(error) = transport.send_json(&command_result_envelope(&state, &result)) {
+            if let Err(error) =
+                transport.send_json(&command_result_envelope(&state, &result, protocol_version))
+            {
                 state.record_diagnostic(error.to_string());
                 disconnected = true;
                 break;
             }
         }
-        if !disconnected && send_outbox(&mut transport, &state, &mut sent_source_seq).is_err() {
+        if !disconnected
+            && send_outbox(
+                &mut transport,
+                &state,
+                &mut sent_source_seq,
+                protocol_version,
+            )
+            .is_err()
+        {
             state.record_diagnostic("outbox delivery failed; unacknowledged suffix will replay");
             disconnected = true;
         }
@@ -311,7 +322,12 @@ pub fn run_durable_runner<E: CommandExecutor>(
                 break;
             }
             poll_executor_events(&mut state, &store, &config, &mut executor)?;
-            if let Err(error) = send_outbox(&mut transport, &state, &mut sent_source_seq) {
+            if let Err(error) = send_outbox(
+                &mut transport,
+                &state,
+                &mut sent_source_seq,
+                connection.protocol_version,
+            ) {
                 disconnected_since.get_or_insert_with(Instant::now);
                 state.record_diagnostic(error.to_string());
                 state.reconnect_count = state.reconnect_count.saturating_add(1);
@@ -368,8 +384,19 @@ pub fn run_durable_runner<E: CommandExecutor>(
                     let (result, lifecycle) =
                         process_command(&mut state, &store, &config, &mut executor, &command)?;
                     let delivery = transport
-                        .send_json(&command_result_envelope(&state, &result))
-                        .and_then(|()| send_outbox(&mut transport, &state, &mut sent_source_seq));
+                        .send_json(&command_result_envelope(
+                            &state,
+                            &result,
+                            connection.protocol_version,
+                        ))
+                        .and_then(|()| {
+                            send_outbox(
+                                &mut transport,
+                                &state,
+                                &mut sent_source_seq,
+                                connection.protocol_version,
+                            )
+                        });
                     if let Err(error) = delivery {
                         disconnected_since.get_or_insert_with(Instant::now);
                         state.record_diagnostic(error.to_string());
@@ -505,21 +532,42 @@ fn send_outbox(
     transport: &mut AuthenticatedTransport,
     state: &DurableState,
     sent_source_seq: &mut u64,
+    protocol_version: u64,
 ) -> Result<(), DurableRunnerError> {
     for event in &state.outbox {
         if event.source_seq <= *sent_source_seq {
             continue;
         }
-        transport.send_json(&event.envelope)?;
+        if protocol_version == 1
+            && event.envelope.pointer("/payload/schemaVersion") == Some(&json!(2))
+        {
+            return Err(DurableRunnerError::invalid(
+                "a PRP v2 event cannot be delivered over a PRP v1 connection",
+            ));
+        }
+        let mut envelope = event.envelope.clone();
+        envelope["version"] = json!(protocol_version);
+        transport.send_json(&envelope)?;
         *sent_source_seq = event.source_seq;
     }
     Ok(())
 }
 
-fn command_result_envelope(state: &DurableState, result: &StoredCommandResult) -> Value {
+fn command_result_envelope(
+    state: &DurableState,
+    result: &StoredCommandResult,
+    protocol_version: u64,
+) -> Value {
+    let mut payload = json!(result);
+    // "indeterminate" is an internal crash-recovery journal state. On the
+    // wire it is a failed command with the preserved execution_indeterminate
+    // reason so the controller can settle the command and continue replay.
+    if result.status == "indeterminate" {
+        payload["status"] = json!("failed");
+    }
     json!({
         "protocol": PROTOCOL,
-        "version": PROTOCOL_VERSION,
+        "version": protocol_version,
         "kind": "command_result",
         "runnerInstanceId": state.runner_instance_id,
         "environmentLeaseId": state.environment_lease_id,
@@ -527,7 +575,7 @@ fn command_result_envelope(state: &DurableState, result: &StoredCommandResult) -
         "normalizedSessionId": state.normalized_session_id,
         "turnId": state.turn_id,
         "itemId": state.item_id,
-        "payload": result,
+        "payload": payload,
     })
 }
 
@@ -539,7 +587,7 @@ fn control_envelope(
 ) -> Value {
     json!({
         "protocol": PROTOCOL,
-        "version": PROTOCOL_VERSION,
+        "version": connection.protocol_version,
         "kind": kind,
         "runnerInstanceId": state.runner_instance_id,
         "environmentLeaseId": state.environment_lease_id,
@@ -636,6 +684,24 @@ mod tests {
             precondition: None,
             payload: json!({}),
         }
+    }
+
+    #[test]
+    fn indeterminate_recovery_result_is_a_failed_wire_result() {
+        let state = DurableState::new(&config(PathBuf::from("unused")));
+        let result = StoredCommandResult {
+            command_id: "command_1".to_owned(),
+            controller_seq: 1,
+            command_type: "semantic_tool.result".to_owned(),
+            status: "indeterminate".to_owned(),
+            result: json!({"code": "execution_indeterminate"}),
+        };
+        let envelope = command_result_envelope(&state, &result, 2);
+        assert_eq!(envelope.pointer("/payload/status"), Some(&json!("failed")));
+        assert_eq!(
+            envelope.pointer("/payload/result/code"),
+            Some(&json!("execution_indeterminate")),
+        );
     }
 
     #[test]

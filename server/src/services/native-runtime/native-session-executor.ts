@@ -6177,6 +6177,8 @@ export async function createRunnerdBackend(input: {
                   () =>
                     registerRunnerPrpAuthority({
                       companyId: input.execution.binding.companyId,
+                      issueId: input.execution.binding.issueId,
+                      agentId: input.execution.binding.agentId,
                       runId: input.execution.binding.runId,
                       authority,
                     }),
@@ -6273,6 +6275,8 @@ export async function createRunnerdBackend(input: {
                   () =>
                     registerRunnerPrpAuthority({
                       companyId: input.execution.binding.companyId,
+                      issueId: input.execution.binding.issueId,
+                      agentId: input.execution.binding.agentId,
                       runId: input.execution.binding.runId,
                       authority,
                     }),

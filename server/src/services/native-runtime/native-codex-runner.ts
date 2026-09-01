@@ -10,6 +10,7 @@ import type { Db } from "@paperclipai/db";
 import { agentSessionGoalActions, agentTaskSessions } from "@paperclipai/db";
 
 import { resolvePaperclipInstanceRoot } from "../../home-paths.js";
+import { failRunnerGoalAction } from "../runner-goals.js";
 import {
   createPaperclipRunnerAuthorizedToolSet,
   type PaperclipSemanticToolDefinition,
@@ -18,6 +19,111 @@ import { runnerPrpCoordinator } from "./runner-prp-coordinator.js";
 
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
 const RUNNER_VERSION = "paperclip-runner-v1";
+
+interface NativeGoalControl {
+  sessionId: string;
+  requestId: string;
+  action: string;
+  payload: Record<string, unknown>;
+  currentStatus: string | null;
+  workingNow: boolean;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+async function readNativeGoalControl(input: {
+  db: Db;
+  companyId: string;
+  issueId: string;
+  agentId: string;
+  requestId: string | null;
+}): Promise<NativeGoalControl | null> {
+  if (!input.requestId) return null;
+  const [row] = await input.db
+    .select({
+      sessionId: agentTaskSessions.id,
+      requestId: agentSessionGoalActions.requestId,
+      action: agentSessionGoalActions.action,
+      payload: agentSessionGoalActions.payloadJson,
+      goal: agentTaskSessions.goalJson,
+      goalStatus: agentTaskSessions.goalStatus,
+    })
+    .from(agentSessionGoalActions)
+    .innerJoin(
+      agentTaskSessions,
+      eq(agentTaskSessions.id, agentSessionGoalActions.sessionId),
+    )
+    .where(
+      and(
+        eq(agentSessionGoalActions.companyId, input.companyId),
+        eq(agentSessionGoalActions.requestId, input.requestId),
+        eq(agentTaskSessions.agentId, input.agentId),
+        eq(agentTaskSessions.taskKey, input.issueId),
+      ),
+    )
+    .limit(1);
+  if (!row) return null;
+  const goal = asRecord(row.goal);
+  return {
+    sessionId: row.sessionId,
+    requestId: row.requestId,
+    action: row.action,
+    payload: asRecord(row.payload),
+    currentStatus: row.goalStatus,
+    workingNow: goal.workingNow === true,
+  };
+}
+
+function nativeGoalCommands(control: NativeGoalControl): Array<{
+  type: string;
+  payload: Record<string, unknown>;
+}> {
+  if (control.action === "clear") {
+    return [
+      {
+        type: "session.goal.clear",
+        payload: { requestId: control.requestId },
+      },
+    ];
+  }
+  if (control.action === "pause") {
+    return [
+      {
+        type: "session.goal.set",
+        payload: { requestId: control.requestId, status: "paused" },
+      },
+    ];
+  }
+  if (control.action === "resume") {
+    return [
+      {
+        type: "session.goal.set",
+        payload: { requestId: control.requestId, status: "active" },
+      },
+    ];
+  }
+  const payload = {
+    requestId: control.requestId,
+    objective: control.payload.objective,
+    ...(control.action === "edit" ? {} : { status: "active" }),
+    ...(Object.prototype.hasOwnProperty.call(control.payload, "tokenBudget")
+      ? { tokenBudget: control.payload.tokenBudget }
+      : {}),
+  };
+  return control.action === "replace"
+    ? [
+        {
+          type: "session.goal.clear",
+          payload: { requestId: control.requestId },
+        },
+        { type: "session.goal.set", payload },
+      ]
+    : [{ type: "session.goal.set", payload }];
+}
 
 interface NativeRunnerProviderLaunch {
   readonly command: string;

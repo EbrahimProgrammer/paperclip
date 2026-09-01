@@ -17,6 +17,7 @@ import type {
   NativeSessionBackend,
 } from "./contracts/native-session-backend.js";
 import type { PersistedNativeSession } from "./contracts/native-session-backend.js";
+import type { HarnessThreadGoal } from "./contracts/harness-driver.js";
 import type {
   PrpEvent,
   PrpStructuredRunResult,
@@ -1128,7 +1129,7 @@ function sessionGoalResult(
       ? {
           blocker: {
             reasonCode: "session_goal_blocked",
-            owner: { class: "agent" },
+            owner: { kind: "agent", name: "session goal provider" },
             unblockAction: reason,
             scope: "current_track" as const,
           },

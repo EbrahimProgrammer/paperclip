@@ -791,10 +791,6 @@ impl CodexProvider {
         self.restart_idle_identity_epoch()
     }
 
-    pub fn active_provider_turn_id(&self) -> Option<&str> {
-        self.active_provider_turn_id.as_deref()
-    }
-
     pub fn get_goal(&mut self) -> Result<Value, LocalRunnerError> {
         self.request("thread/goal/get", json!({"threadId": self.thread_id}))
     }

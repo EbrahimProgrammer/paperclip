@@ -2949,6 +2949,94 @@ export function issueRoutes(
     heartbeat,
     resolveNativeQuestion: (interaction) => deliverNativeQuestionResponse(db, interaction),
   });
+  const runnerGoals = runnerGoalService(db, {
+    enqueueOfflineControl: async ({
+      issueId,
+      agentId,
+      requestId,
+      control,
+    }) => {
+      await heartbeat.wakeup(agentId, {
+        source: "on_demand",
+        triggerDetail: "manual",
+        reason: "goal_control",
+        payload: { issueId, requestId, intent: "goal_control" },
+        idempotencyKey: `goal_control:${requestId}`,
+        requestedByActorType: "system",
+        contextSnapshot: {
+          issueId,
+          taskKey: issueId,
+          resumeIntent: true,
+          goalControlRequestId: requestId,
+          runnerGoalControl: control,
+          skipIssueComment: true,
+        },
+      });
+    },
+  });
+  const stopRunnerGoalForOwnershipChange = async (input: {
+    companyId: string;
+    issueId: string;
+    agentId: string;
+  }) => {
+    const current = await runnerGoals.projection(
+      input.companyId,
+      input.issueId,
+      input.agentId,
+    );
+    if (current?.pendingAction) {
+      throw conflict(
+        "The current agent goal has a control action still in progress",
+        { code: "runner_goal_action_pending", projection: current },
+      );
+    }
+    if (!current?.goal || current.goal.status === "complete") return null;
+    const action = current.capability.actions.includes("pause")
+      ? ("pause" as const)
+      : current.capability.actions.includes("clear")
+        ? ("clear" as const)
+        : null;
+    if (!action) {
+      throw conflict(
+        "The current agent goal cannot be stopped safely before reassignment",
+        { code: "runner_goal_stop_unsupported", projection: current },
+      );
+    }
+    await runnerGoals.act(input.companyId, input.issueId, {
+      requestId: `ownership_${randomUUID()}`,
+      agentId: input.agentId,
+      expectedRevision: current.revision,
+      action,
+    });
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      const observed = await runnerGoals.projection(
+        input.companyId,
+        input.issueId,
+        input.agentId,
+      );
+      const stopped =
+        action === "pause"
+          ? observed?.goal?.status === "paused"
+          : observed?.goal === null;
+      if (observed && stopped && observed.pendingAction === null) return action;
+      if (observed && observed.pendingAction === null && !stopped) {
+        throw conflict(
+          "The current agent goal failed to stop before reassignment",
+          { code: "runner_goal_stop_failed", projection: observed },
+        );
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    }
+    throw conflict("Timed out stopping the current agent goal before reassignment", {
+      code: "runner_goal_stop_timeout",
+      projection: await runnerGoals.projection(
+        input.companyId,
+        input.issueId,
+        input.agentId,
+      ),
+    });
+  };
   const flushIssuePostCommitActions = async (actions: readonly IssuePostCommitAction[]) => {
     if (actions.length === 0) return;
     const { executeIssuePostCommitActions } = await import("../services/issues.js");

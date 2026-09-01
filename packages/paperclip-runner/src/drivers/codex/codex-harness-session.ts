@@ -449,6 +449,15 @@ export class CodexHarnessSession extends CodexSessionState implements HarnessSes
 
   async goal(input: HarnessGoalOperation): Promise<HarnessThreadGoal | null> {
     this.requireCapability("goals");
+    if (
+      input.action !== "get"
+      && !this.goalCapability.actions.includes(input.action)
+    ) {
+      throw this.unsupported(
+        `goal ${input.action}`,
+        "capability action not advertised",
+      );
+    }
     let method: string;
     let params: Record<string, unknown> = { threadId: this.opened.threadId };
     if (input.action === "get") {
@@ -496,6 +505,18 @@ export class CodexHarnessSession extends CodexSessionState implements HarnessSes
           goal,
         },
         { itemId: `${this.opened.threadId}:goal:${this.sourceSequence + 1}` },
+      );
+      this.emitGoalEvent(
+        input.action === "clear"
+          ? "session.goal.cleared"
+          : input.action === "get"
+            ? "session.goal.snapshot"
+            : "session.goal.updated",
+        goal,
+        {
+          ...(input.requestId ? { requestId: input.requestId } : {}),
+          workingNow: this.activeTurnId !== null,
+        },
       );
       return goal === null ? null : structuredClone(goal);
     } catch (error) {

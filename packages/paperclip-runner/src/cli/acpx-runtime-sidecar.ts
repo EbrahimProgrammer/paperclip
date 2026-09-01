@@ -246,6 +246,11 @@ async function dispatch(
           tools: params.tools,
           handler: waitForTool,
         },
+        onGoalUpdate: (goal) =>
+          emit("runtime.goal", {
+            goal,
+            capability: host?.goalCapability() ?? null,
+          }),
       },
       {
         retainAdmissionCleanup: retainFailedAdmissionCleanup,

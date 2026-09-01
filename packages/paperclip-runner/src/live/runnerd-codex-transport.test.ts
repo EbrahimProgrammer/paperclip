@@ -668,10 +668,12 @@ it("runs the lab provider boundary through authenticated durable PRP", async () 
 }, 30_000);
 
 it("controls a Codex session goal end to end through durable PRP v2", async () => {
+  const stateDirectory = await mkdtemp(join(tmpdir(), "runnerd-goal-provider-"));
   const bundle = createCapabilityRunnerdCodexTransport({
     runnerBinary: defaultCapabilityRunnerdBinary(),
     codexCommand: fakeCodex,
-    codexArgs: [],
+    codexArgs: fakeCodexArgs(stateDirectory),
+    stateDirectory,
   });
   bundle.transport.setServerRequestHandler(async () => ({
     success: true,
@@ -739,6 +741,7 @@ it("controls a Codex session goal end to end through durable PRP v2", async () =
     ).resolves.toEqual({ goal: null });
   } finally {
     await bundle.transport.close();
+    await rm(stateDirectory, { recursive: true, force: true });
   }
   expect(bundle.evidence()).toMatchObject({
     runnerExited: true,

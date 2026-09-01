@@ -19,6 +19,8 @@ const UUID_PATTERN =
 
 interface RegisteredAuthority {
   readonly companyId: string;
+  readonly issueId: string | null;
+  readonly agentId: string | null;
   readonly authority: DurablePrpControlPlane;
   readonly generation: symbol;
   readonly runtimeRequestResolutions: Map<
@@ -100,6 +102,8 @@ export function setupRunnerPrpWebSocketServer(
 
 export async function registerRunnerPrpAuthority(input: {
   readonly companyId: string;
+  readonly issueId?: string;
+  readonly agentId?: string;
   readonly runId: string;
   readonly authority: DurablePrpControlPlane;
 }): Promise<{ readonly connectUrl: string; release(): Promise<void> }> {
@@ -115,6 +119,8 @@ export async function registerRunnerPrpAuthority(input: {
   const generation = Symbol(input.runId);
   registrations.set(input.runId, {
     companyId: input.companyId,
+    issueId: input.issueId ?? null,
+    agentId: input.agentId ?? null,
     authority: input.authority,
     generation,
     runtimeRequestResolutions: new Map(),

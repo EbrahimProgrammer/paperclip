@@ -119,6 +119,7 @@ export interface NativeSession {
      */
     signal: AbortSignal;
   }): HarnessRuntimeRequestHandoff;
+  goal?(input: HarnessGoalOperation): Promise<HarnessThreadGoal | null>;
   result(): Promise<{
     result: PrpStructuredRunResult;
     terminal: PrpTerminalState;

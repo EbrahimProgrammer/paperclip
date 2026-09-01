@@ -15,6 +15,8 @@ struct FakeState {
     active_turn_id: Option<String>,
     #[serde(default)]
     next_turn: u64,
+    #[serde(default)]
+    goal: Option<Value>,
 }
 
 fn argument(args: &[String], name: &str) -> Option<String> {
@@ -39,6 +41,7 @@ fn load_state(path: &Path) -> FakeState {
             thread_id: "codex-thread-1".to_owned(),
             active_turn_id: None,
             next_turn: 0,
+            goal: None,
         })
 }
 
@@ -579,6 +582,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let pre_response_notification = args
         .iter()
         .any(|value| value == "--notification-before-response");
+    let goal_policy_disabled = args.iter().any(|value| value == "--goal-policy-disabled");
+    let goal_autostart = args.iter().any(|value| value == "--goal-autostart");
+    let agent_created_goal = args
+        .iter()
+        .any(|value| value == "--agent-created-goal-on-open");
     if require_skill_instructions {
         let skill_path = std::env::var_os("HOME")
             .map(PathBuf::from)

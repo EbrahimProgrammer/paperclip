@@ -235,7 +235,14 @@ fn semantic_result_event(
     }
 }
 
-fn terminal_events(state: &CodexProviderState, event_type: &str) -> Vec<NormalizedProviderEvent> {
+fn terminal_events(
+    state: &CodexProviderState,
+    event_type: &str,
+    goal_status: Option<&str>,
+) -> Vec<NormalizedProviderEvent> {
+    if goal_status == Some("active") {
+        return Vec::new();
+    }
     let Some(contract) = state.completion_contract.as_ref() else {
         return Vec::new();
     };
@@ -1329,7 +1336,7 @@ impl CodexCommandExecutor {
                         "providerTerminalObserved": false,
                     }),
                 })?;
-                state.extend_terminal_events(terminal_events(state, "turn.failed"))?;
+                state.extend_terminal_events(terminal_events(state, "turn.failed", None))?;
             } else {
                 state.push_event(reconciled)?;
             }
@@ -1605,14 +1612,21 @@ impl CodexCommandExecutor {
                 .expect("Codex state exists after provider start");
             state.thread_id = Some(thread_id.clone());
             state.provider_session_id = provider_session_id.clone();
-            state.active_provider_turn_id = None;
+            state.active_provider_turn_id = active_provider_turn_id.clone();
             state.receipt_limit_diagnostic_emitted = false;
             state.receipt_limit_interrupt_pending = false;
             state.receipt_limit_interrupt_accepted = false;
             state.receipt_limit_interrupt_attempts = 0;
             state.receipt_limit_interrupt_deadline_unix_ms = None;
-            state.lifecycle = "session_open".to_owned();
-            state.config.provider_version.clone()
+            state.lifecycle = if active_provider_turn_id.is_some() {
+                "turn_active".to_owned()
+            } else {
+                "session_open".to_owned()
+            };
+            state.goal_capability = Some(goal_capability.clone());
+            state.goal = goal.clone();
+            state.goal_revision = state.goal_revision.saturating_add(1);
+            (state.config.provider_version.clone(), state.goal_revision)
         };
         self.save_state()?;
         Ok(CommandExecution {
@@ -2407,7 +2421,7 @@ impl CodexCommandExecutor {
                 "providerShutdownFailed": provider_shutdown_failed,
             }),
         })?;
-        let terminal = terminal_events(state, terminal_event_type);
+        let terminal = terminal_events(state, terminal_event_type, None);
         state.extend_terminal_events(terminal)?;
         self.save_state()
     }
@@ -2719,6 +2733,27 @@ impl CodexCommandExecutor {
                                     | "turn.interrupted"
                             )
                         });
+                    let goal_reconciliation = if terminal_event_type.is_some()
+                        && self
+                            .state
+                            .as_ref()
+                            .and_then(|state| state.goal_capability.as_ref())
+                            .is_some_and(|capability| capability.availability == "available")
+                    {
+                        Some(
+                            self.provider
+                                .as_mut()
+                                .expect("provider remains present during goal reconciliation")
+                                .get_goal()
+                                .map_err(|error| error.to_string()),
+                        )
+                    } else {
+                        None
+                    };
+                    let working_now = self
+                        .provider
+                        .as_ref()
+                        .is_some_and(|provider| provider.active_provider_turn_id().is_some());
                     let identity = self.event_identity.clone();
                     let state = self
                         .state
@@ -2741,6 +2776,19 @@ impl CodexCommandExecutor {
                             )
                         })?;
                         state.reconcile_active_provider_turn(Some(provider_turn_id));
+                        if let Some(goal) = state.goal.as_mut() {
+                            goal.working_now = true;
+                            state.goal_revision = state.goal_revision.saturating_add(1);
+                            state.push_event(NormalizedProviderEvent {
+                                event_type: "session.goal.updated".to_owned(),
+                                priority: EventPriority::P0,
+                                payload: goal_event_payload(
+                                    state.goal.as_ref(),
+                                    state.goal_capability.as_ref(),
+                                    state.goal_revision,
+                                ),
+                            })?;
+                        }
                     }
                     if terminal_event_type.is_some() {
                         state.settle_active_provider_turn_identity()?;
@@ -2874,7 +2922,12 @@ impl CodexCommandExecutor {
                     }
                     let trace_last_event_sequence = state.next_provider_event_seq;
                     if let Some(event_type) = terminal_event_type {
-                        state.extend_terminal_events(terminal_events(state, &event_type))?;
+                        let goal_status = state.goal.as_ref().map(|goal| goal.status.as_str());
+                        state.extend_terminal_events(terminal_events(
+                            state,
+                            &event_type,
+                            goal_status,
+                        ))?;
                     }
                     let trace_emitted_event_ids = identity
                         .as_ref()

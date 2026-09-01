@@ -1118,6 +1118,23 @@ export class DurablePrpControlPlane {
     return command;
   }
 
+  commandOutcome(commandId: string): {
+    status: DurableRecoveryCoreCommand["status"];
+    result: Record<string, unknown> | null;
+  } | null {
+    const command = this.#store.state.commands.find(
+      (candidate) => candidate.commandId === commandId,
+    );
+    if (!command) return null;
+    return {
+      status: command.status,
+      result:
+        command.result && typeof command.result === "object"
+          ? structuredClone(command.result as Record<string, unknown>)
+          : null,
+    };
+  }
+
   /** Attach one HTTP upgrade to this run-bound authority. */
   handleUpgrade(
     request: IncomingMessage,
@@ -1505,7 +1522,7 @@ export class DurablePrpControlPlane {
         authKeyDigest: `sha256:${material.authKey.toString("hex")}`,
         leaseId: `connection_lease_${randomUUID()}`,
         identity: structuredClone(this.#identity),
-        protocolVersion,
+        protocolVersion: pending.selectedVersion,
         expiresAt: new Date(expiresAtUnixMs).toISOString(),
         expiresAtUnixMs,
         revocationEpoch: 0,
@@ -1554,7 +1571,7 @@ export class DurablePrpControlPlane {
     this.#store.save();
     connection.sendJson({
       protocol,
-      version: protocolVersion,
+      version: lease.protocolVersion,
       envelopeId: `welcome_${this.#store.state.connectionCount}`,
       kind: "welcome",
       runnerInstanceId: this.#identity.runnerInstanceId,
@@ -1579,7 +1596,7 @@ export class DurablePrpControlPlane {
           environmentLeaseId: this.#identity.environmentLeaseId,
           runId: this.#identity.runId,
           normalizedSessionId: this.#identity.normalizedSessionId,
-          protocolVersion,
+          protocolVersion: lease.protocolVersion,
         },
         maxFrameBytes,
         maxBatchEvents: 100,

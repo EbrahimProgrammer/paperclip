@@ -309,6 +309,8 @@ export function runnerPrpCoordinator(
       try {
         registration = await registerRunnerPrpAuthority({
           companyId: input.companyId,
+          issueId: input.issueId,
+          agentId: input.agentId,
           runId: input.runId,
           authority,
         });

@@ -1849,7 +1849,7 @@ describe("Codex app-server Codex driver", () => {
     const session = await driver.openSession({
       runId: "run-goals-action-subset",
       normalizedSessionId: "normalized-goals-action-subset",
-      workingDirectory: "/workspace",
+      workingDirectory: TEST_WORKING_DIRECTORY,
     });
     const events = session.events()[Symbol.asyncIterator]();
     await events.next();

@@ -20,7 +20,7 @@ patchedDependencies:
     hash: b2ggqg6aj4hdob4whk6vq6jmc4
     path: patches/acpx@0.12.0.patch
   acpx@0.13.1:
-    hash: lzpwjtiaybzoijy455dfycwavu
+    hash: kony4y34rhcebxwuonhjz4nxay
     path: patches/acpx@0.13.1.patch
   embedded-postgres@18.1.0-beta.16:
     hash: 55uhvnotpqyiy37rn3pqpukhei
@@ -476,10 +476,10 @@ importers:
         version: 0.70.0(patch_hash=fymctidcjqjhi4cj72qtivlxry)(@anthropic-ai/sdk@0.121.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))
       '@agentclientprotocol/codex-acp':
         specifier: 1.6.2
-        version: 1.6.2(patch_hash=grbydorkxatbzksnwwfuawwtim)
+        version: 1.6.2(patch_hash=ip2vlcoqgm3spb76ssbhpqff4u)
       acpx:
         specifier: 0.13.1
-        version: 0.13.1(patch_hash=lzpwjtiaybzoijy455dfycwavu)
+        version: 0.13.1(patch_hash=kony4y34rhcebxwuonhjz4nxay)
       ajv:
         specifier: ^8.20.0
         version: 8.20.0
@@ -895,7 +895,7 @@ importers:
         version: 0.6.1(better-auth@1.7.0(@opentelemetry/api@1.9.1)(drizzle-kit@0.31.10)(drizzle-orm@0.45.2(@opentelemetry/api@1.9.1)(kysely@0.29.5)(pg@8.18.0)(postgres@3.4.9))(pg@8.18.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(vitest@4.1.10(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(jsdom@30.0.1(@noble/hashes@2.3.0))(tsx@4.23.12)))
       acpx:
         specifier: 0.13.1
-        version: 0.13.1(patch_hash=lzpwjtiaybzoijy455dfycwavu)
+        version: 0.13.1(patch_hash=kony4y34rhcebxwuonhjz4nxay)
       ajv:
         specifier: ^8.20.0
         version: 8.20.0
@@ -12437,7 +12437,7 @@ snapshots:
       - bare-buffer
       - react-native-b4a
 
-  acpx@0.13.1(patch_hash=lzpwjtiaybzoijy455dfycwavu):
+  acpx@0.13.1(patch_hash=kony4y34rhcebxwuonhjz4nxay):
     dependencies:
       '@agentclientprotocol/sdk': 1.4.0(zod@4.4.3)
       commander: 15.0.0
