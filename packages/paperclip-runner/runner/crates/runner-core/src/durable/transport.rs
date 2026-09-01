@@ -1356,8 +1356,20 @@ pub(crate) fn validate_control_identity(
     state: &DurableState,
     connection: Option<&ConnectionMetadata>,
 ) -> Result<(), DurableRunnerError> {
+    let protocol_version = connection
+        .map(|connection| connection.protocol_version)
+        .unwrap_or(PROTOCOL_VERSION);
+    validate_control_identity_version(value, state, connection, protocol_version)
+}
+
+fn validate_control_identity_version(
+    value: &Value,
+    state: &DurableRunnerState,
+    connection: Option<&ConnectionMetadata>,
+    protocol_version: u64,
+) -> Result<(), DurableRunnerError> {
     if value.get("protocol").and_then(Value::as_str) != Some(PROTOCOL)
-        || value.get("version").and_then(Value::as_u64) != Some(PROTOCOL_VERSION)
+        || value.get("version").and_then(Value::as_u64) != Some(protocol_version)
     {
         return Err(DurableRunnerError::invalid(
             "control envelope protocol identity is invalid",

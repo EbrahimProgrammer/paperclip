@@ -5597,10 +5597,21 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     // when an active issue still references the run. The run is live for that
     // active issue, so a terminal issue named in the context snapshot must not
     // terminalize it.
+    const runContext = parseObject(run.contextSnapshot);
+    const isTerminalSessionGoalControl =
+      runContext.resumeIntent === true &&
+      readNonEmptyString(runContext.goalControlRequestId) !== null;
     let issueTerminalStatus: "succeeded" | "cancelled" | null =
-      options?.referencingIssueTerminalStatus ?? null;
+      isTerminalSessionGoalControl
+        ? null
+        : (options?.referencingIssueTerminalStatus ?? null);
     const issueId = issueIdFromRunContext(run.contextSnapshot);
-    if (!issueTerminalStatus && !options?.runReferencedByActiveIssue && issueId) {
+    if (
+      !isTerminalSessionGoalControl &&
+      !issueTerminalStatus &&
+      !options?.runReferencedByActiveIssue &&
+      issueId
+    ) {
       const issueStatus = await db
         .select({ status: issues.status })
         .from(issues)

@@ -438,6 +438,60 @@ function record(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function appServerThreadGoal(
+  value: unknown,
+  threadId: string,
+): Record<string, unknown> | null {
+  const goal = record(value);
+  const objective = typeof goal.objective === "string"
+    ? goal.objective.trim()
+    : "";
+  const rawStatus = typeof goal.status === "string" ? goal.status : "";
+  const status = rawStatus === "usage_limited"
+    ? "usageLimited"
+    : rawStatus === "budget_limited"
+      ? "budgetLimited"
+      : rawStatus;
+  if (
+    objective.length === 0 ||
+    ![
+      "active",
+      "paused",
+      "blocked",
+      "limited",
+      "usageLimited",
+      "budgetLimited",
+      "complete",
+    ].includes(status)
+  ) return null;
+
+  const epochSeconds = (timestamp: unknown): number => {
+    if (typeof timestamp === "number" && Number.isFinite(timestamp)) {
+      return timestamp > 10_000_000_000 ? timestamp / 1_000 : timestamp;
+    }
+    if (typeof timestamp !== "string") return 0;
+    const milliseconds = Date.parse(timestamp);
+    return Number.isFinite(milliseconds) ? milliseconds / 1_000 : 0;
+  };
+
+  return {
+    threadId,
+    objective,
+    status,
+    tokenBudget:
+      typeof goal.tokenBudget === "number" ? goal.tokenBudget : null,
+    tokensUsed: typeof goal.tokensUsed === "number" ? goal.tokensUsed : 0,
+    timeUsedSeconds:
+      typeof goal.timeUsedSeconds === "number"
+        ? goal.timeUsedSeconds
+        : typeof goal.elapsedSeconds === "number"
+          ? goal.elapsedSeconds
+          : 0,
+    createdAt: epochSeconds(goal.createdAt),
+    updatedAt: epochSeconds(goal.updatedAt),
+  };
+}
+
 type PendingTraceRehydration = {
   sourceEventId: string;
   eventType: string;
@@ -1195,6 +1249,26 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
           turns: recoveredTurns,
         },
       };
+    }
+    if (method === "thread/goal/get") {
+      const result = await this.#commandResult("session.goal.get", params);
+      return {
+        goal: appServerThreadGoal(result.goal, this.#threadId),
+      };
+    }
+    if (method === "thread/goal/set") {
+      const result = await this.#commandResult("session.goal.set", params);
+      const snapshot = record(result.snapshot);
+      return {
+        goal: appServerThreadGoal(
+          snapshot.goal ?? result.goal,
+          this.#threadId,
+        ),
+      };
+    }
+    if (method === "thread/goal/clear") {
+      await this.#commandResult("session.goal.clear", params);
+      return {};
     }
     if (method === "session/budget/increase") {
       await this.#command("session.budget.increase", params);

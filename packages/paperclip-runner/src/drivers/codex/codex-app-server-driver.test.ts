@@ -37,7 +37,6 @@ import {
   validateCodexResultProposal,
 } from "../../mock-core/codex-runner.js";
 import {
-  CODEX_INVALID_REQUEST,
   CODEX_METHOD_NOT_FOUND,
   CodexRpcError,
   type CodexAppServerTransport,
@@ -1658,7 +1657,9 @@ describe("Codex app-server Codex driver", () => {
     ).rejects.toBeInstanceOf(HarnessStaleTurnError);
     const events = session.events()[Symbol.asyncIterator]();
     const observed: PrpEvent[] = [];
-    for (let index = 0; index < 9; index += 1) {
+    // PRP v2 adds a capability and authoritative goal snapshot immediately
+    // after session start, so include those two events in this bounded read.
+    for (let index = 0; index < 11; index += 1) {
       const next = await events.next();
       if (next.done) break;
       observed.push(next.value);
@@ -1760,15 +1761,21 @@ describe("Codex app-server Codex driver", () => {
 
     // Both denials a real app-server sends: the method is absent, and the
     // build has the feature switched off.
-    for (const denial of [
-      new CodexRpcError(
-        '{"code":-32601,"message":"method not found"}',
-        CODEX_METHOD_NOT_FOUND,
-      ),
-      new CodexRpcError(
-        '{"code":-32600,"message":"goals feature is disabled"}',
-        CODEX_INVALID_REQUEST,
-      ),
+    for (const { denial, availability } of [
+      {
+        denial: new CodexRpcError(
+          '{"code":-32601,"message":"method not found"}',
+          CODEX_METHOD_NOT_FOUND,
+        ),
+        availability: "unsupported",
+      },
+      {
+        denial: new CodexRpcError(
+          '{"code":-32004,"message":"goals feature is disabled by policy"}',
+          -32_004,
+        ),
+        availability: "policy_disabled",
+      },
     ]) {
       const unsupportedTransport = new FakeCodexTransport();
       unsupportedTransport.rejectMethods.set("thread/goal/get", denial);
@@ -1781,6 +1788,14 @@ describe("Codex app-server Codex driver", () => {
       expect((await unsupportedDriver.descriptor()).capabilities).toMatchObject(
         { goals: false },
       );
+      const unsupportedEvents = unsupported.events()[Symbol.asyncIterator]();
+      await unsupportedEvents.next();
+      await expect(unsupportedEvents.next()).resolves.toMatchObject({
+        value: {
+          eventType: "session.capabilities.updated",
+          payload: { sessionGoals: { availability } },
+        },
+      });
       await expect(
         unsupported.goal?.({ action: "get" }),
       ).rejects.toBeInstanceOf(HarnessCapabilityUnavailableError);
@@ -1817,6 +1832,51 @@ describe("Codex app-server Codex driver", () => {
       ).toHaveLength(2);
       await session.close({ reason: "fixture complete" });
     }
+  });
+
+  it("preserves a provider-neutral goal action subset through the Codex transport facade", async () => {
+    const transport = new FakeCodexTransport();
+    const driver = makeDriver([transport], {
+      goalCapability: {
+        actions: ["set", "clear"],
+        autonomousUpdates: true,
+        persistentAcrossResume: true,
+        maxObjectiveChars: 4_000,
+        tokenBudgetControl: false,
+        usageReporting: true,
+      },
+    });
+    const session = await driver.openSession({
+      runId: "run-goals-action-subset",
+      normalizedSessionId: "normalized-goals-action-subset",
+      workingDirectory: "/workspace",
+    });
+    const events = session.events()[Symbol.asyncIterator]();
+    await events.next();
+    await expect(events.next()).resolves.toMatchObject({
+      value: {
+        eventType: "session.capabilities.updated",
+        payload: {
+          sessionGoals: {
+            availability: "available",
+            actions: ["set", "clear"],
+            tokenBudgetControl: false,
+          },
+        },
+      },
+    });
+
+    await expect(
+      session.goal?.({ action: "pause" }),
+    ).rejects.toBeInstanceOf(HarnessCapabilityUnavailableError);
+    expect(
+      transport.calls.filter(({ method }) => method === "thread/goal/set"),
+    ).toHaveLength(0);
+    await expect(
+      session.goal?.({ action: "set", objective: "Finish the task" }),
+    ).resolves.toMatchObject({ objective: "Finish the task" });
+    await expect(session.goal?.({ action: "clear" })).resolves.toBeNull();
+    await session.close({ reason: "fixture complete" });
   });
 
   it("validates runtime request resolutions against the kind of request they answer", async () => {
@@ -3501,7 +3561,8 @@ describe("Codex app-server Codex driver", () => {
     ).rejects.toBeInstanceOf(HarnessCapabilityUnavailableError);
     const iterator = session.events()[Symbol.asyncIterator]();
     const events: PrpEvent[] = [];
-    for (let index = 0; index < 6; index += 1) {
+    // PRP v2 emits capability and goal snapshots before turn events.
+    for (let index = 0; index < 8; index += 1) {
       const next = await iterator.next();
       if (next.value) events.push(next.value);
     }

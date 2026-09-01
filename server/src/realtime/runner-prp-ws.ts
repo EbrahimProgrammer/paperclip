@@ -129,6 +129,61 @@ export async function registerRunnerPrpAuthority(input: {
   };
 }
 
+export function queueLiveRunnerPrpCommand(input: {
+  companyId: string;
+  issueId: string;
+  agentId: string;
+  type: string;
+  payload?: Record<string, unknown>;
+  commandId?: string;
+}): {
+  runId: string;
+  commandId: string;
+  controllerSeq: number;
+  completion: Promise<Record<string, unknown> | null>;
+} | null {
+  const registration = [...registrations.entries()].find(([, candidate]) =>
+    candidate.companyId === input.companyId &&
+    candidate.issueId === input.issueId &&
+    candidate.agentId === input.agentId
+  );
+  if (!registration) return null;
+  const [runId, binding] = registration;
+  const command = binding.authority.queueCommand(
+    input.type,
+    input.payload ?? {},
+    input.commandId,
+    true,
+  );
+  return {
+    runId,
+    commandId: command.commandId,
+    controllerSeq: command.controllerSeq,
+    completion: (async () => {
+      const deadline = Date.now() + 30_000;
+      while (Date.now() < deadline) {
+        const outcome = binding.authority.commandOutcome(command.commandId);
+        if (!outcome) {
+          throw new Error(`runner_prp_command_missing:${command.commandId}`);
+        }
+        if (outcome.status === "completed") return outcome.result;
+        if (outcome.status === "failed" || outcome.status === "rejected") {
+          const message =
+            outcome.result && typeof outcome.result.message === "string"
+              ? outcome.result.message
+              : `runner_prp_command_${outcome.status}:${command.commandId}`;
+          throw new Error(message);
+        }
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 10);
+          timer.unref();
+        });
+      }
+      throw new Error(`runner_prp_command_timeout:${command.commandId}`);
+    })(),
+  };
+}
+
 export class RunnerPrpRuntimeRequestResolutionError extends Error {
   constructor(
     readonly code:

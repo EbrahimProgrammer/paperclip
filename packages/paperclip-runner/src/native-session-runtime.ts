@@ -65,6 +65,13 @@ interface QuarantinedSessionCleanup {
 
 const quarantinedSessionCleanups = new Set<QuarantinedSessionCleanup>();
 
+export interface NativeSessionGoalControl {
+  requestId: string;
+  action: "create" | "edit" | "replace" | "pause" | "resume" | "clear";
+  objective?: string;
+  tokenBudget?: number | null;
+}
+
 export interface ExecuteNativeSessionOptions {
   input: NativeExecutionInput;
   backend: NativeSessionBackend;
@@ -990,6 +997,154 @@ async function consumeTurn(
     if (timer !== undefined) clearTimeout(timer);
     removeExternalAbort();
   }
+}
+
+function goalStatus(goal: HarnessThreadGoal | null):
+  | "active"
+  | "paused"
+  | "blocked"
+  | "limited"
+  | "usage_limited"
+  | "budget_limited"
+  | "complete"
+  | null {
+  if (!goal) return null;
+  return goal.status === "usageLimited"
+    ? "usage_limited"
+    : goal.status === "budgetLimited"
+      ? "budget_limited"
+      : goal.status;
+}
+
+function goalFromEvent(event: PrpEvent): HarnessThreadGoal | null | undefined {
+  if (
+    event.eventType !== "session.goal.snapshot" &&
+    event.eventType !== "session.goal.updated" &&
+    event.eventType !== "session.goal.cleared"
+  ) return undefined;
+  if (event.eventType === "session.goal.cleared") return null;
+  const value = event.payload.goal;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.objective !== "string" || typeof record.status !== "string") return null;
+  const providerStatus = record.status === "usage_limited"
+    ? "usageLimited"
+    : record.status === "budget_limited"
+      ? "budgetLimited"
+      : record.status;
+  if (!["active", "paused", "blocked", "limited", "usageLimited", "budgetLimited", "complete"].includes(providerStatus)) {
+    return null;
+  }
+  const epoch = (value: unknown): number => {
+    if (typeof value !== "string") return 0;
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+  return {
+    threadId: "normalized",
+    objective: record.objective,
+    status: providerStatus as HarnessThreadGoal["status"],
+    tokenBudget: typeof record.tokenBudget === "number" ? record.tokenBudget : null,
+    tokensUsed: typeof record.tokensUsed === "number" ? record.tokensUsed : 0,
+    timeUsedSeconds: typeof record.elapsedSeconds === "number" ? record.elapsedSeconds : 0,
+    createdAt: epoch(record.createdAt),
+    updatedAt: epoch(record.updatedAt),
+  };
+}
+
+export async function applyNativeSessionGoalControl(
+  session: NativeSession,
+  control: NativeSessionGoalControl,
+): Promise<HarnessThreadGoal | null> {
+  if (!session.goal) throw new Error("native_session_goal_unavailable");
+  if (control.action === "clear") {
+    return session.goal({ action: "clear", requestId: control.requestId });
+  }
+  if (control.action === "pause" || control.action === "resume") {
+    return session.goal({ action: control.action, requestId: control.requestId });
+  }
+  const objective = control.objective?.trim();
+  if (!objective) throw new Error(`native_session_goal_${control.action}_objective_required`);
+  if (control.action === "replace") {
+    await session.goal({ action: "clear", requestId: control.requestId });
+  }
+  let status: HarnessThreadGoal["status"] = "active";
+  if (control.action === "edit") {
+    const current = await session.goal({ action: "get" });
+    if (!current) throw new Error("native_session_goal_not_found");
+    status = current.status === "complete" ? "active" : current.status;
+  }
+  return session.goal({
+    action: "set",
+    objective,
+    status,
+    requestId: control.requestId,
+    ...(control.tokenBudget !== undefined
+      ? { tokenBudget: control.tokenBudget }
+      : {}),
+  });
+}
+
+function sessionGoalResult(
+  input: NativeExecutionInput,
+  goal: HarnessThreadGoal | null,
+  reason: string,
+): PrpStructuredRunResult {
+  const status = goalStatus(goal);
+  const objective = goal?.objective ?? input.completionContract.contract.objective;
+  const disposition = status === "complete"
+    ? "done"
+    : status === "blocked"
+      ? "blocked"
+      : "yielded";
+  const result: PrpStructuredRunResult = {
+    schema: "paperclip.run_result.v1",
+    reportedWorkDisposition: disposition,
+    summary: status === "complete"
+      ? `Session goal completed: ${objective}`
+      : status === "blocked"
+        ? `Session goal blocked: ${objective}`
+        : `Session goal yielded (${status ?? "cleared"}): ${objective}`,
+    completionClaim: {
+      contractRevision: input.completionContract.contract.revision,
+      objectiveSatisfied: status === "complete",
+      criteria: input.completionContract.contract.criteria.map((criterion) => ({
+        criterionId: criterion.id,
+        status: status === "complete" ? "satisfied" : "unknown",
+        evidenceRefs: status === "complete" ? ["session-goal:complete"] : [],
+        explanation: `Provider session goal status: ${status ?? "cleared"}.`,
+      })),
+      remainingWork: status === "complete"
+        ? []
+        : [{ description: reason, blocksCompletion: true }],
+    },
+    evidence: status === "complete"
+      ? [{ kind: "session_goal_status", ref: "session-goal:complete" }]
+      : [],
+    verification: [],
+    attentionRequests: [],
+    artifacts: [],
+    ...(disposition === "blocked"
+      ? {
+          blocker: {
+            reasonCode: "session_goal_blocked",
+            owner: { class: "agent" },
+            unblockAction: reason,
+            scope: "current_track" as const,
+          },
+        }
+      : {}),
+    ...(disposition === "yielded"
+      ? {
+          continuation: {
+            kind: "same_agent" as const,
+            summary: reason,
+            idempotencyKey: `session-goal:${input.binding.issueId}:${status ?? "cleared"}`,
+          },
+        }
+      : {}),
+  };
+  return result;
 }
 
 function checkpointCursor(cursor: string | null | undefined): number {

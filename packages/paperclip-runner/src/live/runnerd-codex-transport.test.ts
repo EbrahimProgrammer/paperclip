@@ -667,6 +667,85 @@ it("runs the lab provider boundary through authenticated durable PRP", async () 
   });
 }, 30_000);
 
+it("controls a Codex session goal end to end through durable PRP v2", async () => {
+  const bundle = createCapabilityRunnerdCodexTransport({
+    runnerBinary: defaultCapabilityRunnerdBinary(),
+    codexCommand: fakeCodex,
+    codexArgs: [],
+  });
+  bundle.transport.setServerRequestHandler(async () => ({
+    success: true,
+    contentItems: [],
+  }));
+  try {
+    await bundle.transport.request("initialize", {});
+    const opened = await bundle.transport.request("thread/start", {
+      cwd: tmpdir(),
+      dynamicTools: [
+        {
+          name: "get_task_context",
+          description: "Read the active task.",
+          inputSchema: {
+            type: "object",
+            properties: {},
+            additionalProperties: false,
+          },
+        },
+      ],
+    });
+    const threadId = opened.thread.id;
+
+    await expect(
+      bundle.transport.request("thread/goal/set", {
+        threadId,
+        objective: "Finish the durable PRP goal test",
+        status: "active",
+        tokenBudget: 12_000,
+      }),
+    ).resolves.toMatchObject({
+      goal: {
+        threadId,
+        objective: "Finish the durable PRP goal test",
+        status: "active",
+        tokenBudget: 12_000,
+      },
+    });
+    await expect(
+      bundle.transport.request("thread/goal/get", { threadId }),
+    ).resolves.toMatchObject({
+      goal: {
+        threadId,
+        objective: "Finish the durable PRP goal test",
+        status: "active",
+      },
+    });
+    await expect(
+      bundle.transport.request("thread/goal/set", {
+        threadId,
+        status: "paused",
+      }),
+    ).resolves.toMatchObject({ goal: { status: "paused" } });
+    await expect(
+      bundle.transport.request("thread/goal/set", {
+        threadId,
+        status: "active",
+      }),
+    ).resolves.toMatchObject({ goal: { status: "active" } });
+    await expect(
+      bundle.transport.request("thread/goal/clear", { threadId }),
+    ).resolves.toEqual({});
+    await expect(
+      bundle.transport.request("thread/goal/get", { threadId }),
+    ).resolves.toEqual({ goal: null });
+  } finally {
+    await bundle.transport.close();
+  }
+  expect(bundle.evidence()).toMatchObject({
+    runnerExited: true,
+    runnerExitCode: 0,
+  });
+}, 30_000);
+
 it("bridges a runnerd-native question into the server request handler and resolves it canonically", async () => {
   const stateDirectory = await mkdtemp(join(tmpdir(), "runnerd-runtime-question-"));
   const bundle = createCapabilityRunnerdCodexTransport({

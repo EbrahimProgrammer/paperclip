@@ -791,6 +791,40 @@ impl CodexProvider {
         self.restart_idle_identity_epoch()
     }
 
+    pub fn active_provider_turn_id(&self) -> Option<&str> {
+        self.active_provider_turn_id.as_deref()
+    }
+
+    pub fn get_goal(&mut self) -> Result<Value, LocalRunnerError> {
+        self.request("thread/goal/get", json!({"threadId": self.thread_id}))
+    }
+
+    pub fn set_goal(
+        &mut self,
+        objective: Option<&str>,
+        status: Option<&str>,
+        token_budget: Option<Option<u64>>,
+    ) -> Result<Value, LocalRunnerError> {
+        let mut params = json!({"threadId": self.thread_id});
+        let params = params
+            .as_object_mut()
+            .expect("Codex goal parameters are an object");
+        if let Some(objective) = objective {
+            params.insert("objective".to_owned(), json!(objective));
+        }
+        if let Some(status) = status {
+            params.insert("status".to_owned(), json!(status));
+        }
+        if let Some(token_budget) = token_budget {
+            params.insert("tokenBudget".to_owned(), json!(token_budget));
+        }
+        self.request("thread/goal/set", Value::Object(params.clone()))
+    }
+
+    pub fn clear_goal(&mut self) -> Result<Value, LocalRunnerError> {
+        self.request("thread/goal/clear", json!({"threadId": self.thread_id}))
+    }
+
     pub fn start_turn(&mut self, message: &str, cwd: &str) -> Result<Value, LocalRunnerError> {
         if self.quarantined {
             return Err(LocalRunnerError::invalid(

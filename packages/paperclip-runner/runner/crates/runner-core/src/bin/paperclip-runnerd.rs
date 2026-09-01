@@ -23,7 +23,7 @@ fn build_metadata() -> serde_json::Value {
         "prp": {
             "name": "paperclip.runner",
             "minimumVersion": 1,
-            "maximumVersion": 1
+            "maximumVersion": 2
         },
         "prpTransportModes": ["dial_ws_loopback", "dial_wss", "listen_ws"]
     })
