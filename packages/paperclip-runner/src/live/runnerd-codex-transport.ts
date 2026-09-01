@@ -427,6 +427,23 @@ export function latestRunnerdSessionReadiness(
   return null;
 }
 
+export function unseenRunnerdCommittedEvents<
+  T extends { sourceSeq: number },
+>(events: readonly T[], lastSourceSeq: number): T[] {
+  const unseen = events.filter((event) => event.sourceSeq > lastSourceSeq);
+  if (unseen.length === 0) return [];
+  let expectedSourceSeq = lastSourceSeq + 1;
+  for (const event of unseen) {
+    if (event.sourceSeq !== expectedSourceSeq) {
+      throw new Error(
+        `provider_notification_window_exceeded: expected source sequence ${expectedSourceSeq}, received ${event.sourceSeq}`,
+      );
+    }
+    expectedSourceSeq += 1;
+  }
+  return unseen;
+}
+
 export function expandRunnerdCanonicalNotifications(
   method: string,
   input: unknown,
@@ -434,6 +451,41 @@ export function expandRunnerdCanonicalNotifications(
   const payload = record(input);
   if (!Array.isArray(payload.events)) return [{ method, params: payload }];
   return payload.events.map((event) => ({ method, params: record(event) }));
+}
+
+export function runnerdCanonicalNotificationMethod(
+  eventType: string,
+  payload: Record<string, unknown>,
+): string | undefined {
+  // An empty open/resume snapshot is already returned by thread/goal/get and
+  // is not a provider-side clear transition. Do not insert a synthetic clear
+  // ahead of the first real turn notification.
+  if (eventType === "session.goal.snapshot" && payload.goal === null) {
+    return undefined;
+  }
+  return (
+    {
+      "turn.started": "turn/started",
+      "item.started": "item/started",
+      "item.delta": "item/agentMessage/delta",
+      "item.completed": "item/completed",
+      "turn.completed": "turn/completed",
+      "turn.failed": "turn/completed",
+      "turn.interrupted": "turn/completed",
+      "turn.cancelled": "turn/completed",
+      "usage.reported": "thread/tokenUsage/updated",
+      "plan.updated": "turn/plan/updated",
+      "workspace.change.updated": "paperclip/workspaceChange/updated",
+      "run.result.proposed": "paperclip/runResult",
+      "session.goal.snapshot": "thread/goal/updated",
+      "session.goal.updated": "thread/goal/updated",
+      "session.goal.cleared": "thread/goal/cleared",
+      "session.updated":
+        payload.status === "budget_reached"
+          ? "provider/budgetReached"
+          : "provider/sessionUpdated",
+    } as Record<string, string>
+  )[eventType];
 }
 
 export function resolveRunnerdSessionIdentity(input: unknown): {
@@ -894,6 +946,21 @@ export function rehydrateRunnerdWorkspaceChangeNotification(
   };
 }
 
+export function rehydrateRunnerdGoalNotification(
+  rawParams: Record<string, unknown>,
+  openedThreadId: string,
+  method: "thread/goal/updated" | "thread/goal/cleared",
+): Record<string, unknown> {
+  if (method === "thread/goal/cleared") {
+    return { ...rawParams, threadId: openedThreadId };
+  }
+  return {
+    ...rawParams,
+    threadId: openedThreadId,
+    goal: appServerThreadGoal(rawParams.goal, openedThreadId),
+  };
+}
+
 function commandDigest(value: unknown): string {
   return `sha256:${createHash("sha256").update(durableRecoveryInternals.canonicalJson(value)).digest("hex")}`;
 }
@@ -1126,7 +1193,7 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
   #core: DurablePrpControlPlane | null = null;
   #handle: RunnerProcessHandle | null = null;
   #pump: NodeJS.Timeout | null = null;
-  #eventIndex = 0;
+  #lastEventSourceSeq = 0;
   #threadId = "";
   #sessionId: string | null = null;
   #providerIdentity: Record<string, unknown> | null = null;
@@ -1969,7 +2036,10 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
       // notifications into the outer run authority.
       this.#adoptProviderReadiness(persistedReadiness, { persisted: true });
     }
-    this.#eventIndex = core.store.state.committedEvents.length;
+    this.#lastEventSourceSeq = core.store.state.committedEvents.reduce(
+      (highest, event) => Math.max(highest, event.sourceSeq),
+      0,
+    );
     const registration = this.options.controlPlaneRegistration
       ? await this.options.controlPlaneRegistration(core)
       : null;
@@ -2220,8 +2290,12 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
   #pumpEvents(): void {
     this.#flushPendingTraceRehydrations();
     const events = this.#core?.store.state.committedEvents ?? [];
-    while (this.#eventIndex < events.length) {
-      const event = events[this.#eventIndex++];
+    const unseenEvents = unseenRunnerdCommittedEvents(
+      events,
+      this.#lastEventSourceSeq,
+    );
+    for (const event of unseenEvents) {
+      this.#lastEventSourceSeq = event.sourceSeq;
       if (
         event.eventType === "harness.ready" ||
         event.eventType === "session.started" ||
@@ -2289,26 +2363,10 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
       }
       const eventPayload = record(event.envelope.payload).payload;
       const sessionUpdatePayload = record(eventPayload);
-      const canonicalMethod = (
-        {
-          "turn.started": "turn/started",
-          "item.started": "item/started",
-          "item.delta": "item/agentMessage/delta",
-          "item.completed": "item/completed",
-          "turn.completed": "turn/completed",
-          "turn.failed": "turn/completed",
-          "turn.interrupted": "turn/completed",
-          "turn.cancelled": "turn/completed",
-          "usage.reported": "thread/tokenUsage/updated",
-          "plan.updated": "turn/plan/updated",
-          "workspace.change.updated": "paperclip/workspaceChange/updated",
-          "run.result.proposed": "paperclip/runResult",
-          "session.updated":
-            sessionUpdatePayload.status === "budget_reached"
-              ? "provider/budgetReached"
-              : "provider/sessionUpdated",
-        } as Record<string, string>
-      )[event.eventType];
+      const canonicalMethod = runnerdCanonicalNotificationMethod(
+        event.eventType,
+        sessionUpdatePayload,
+      );
       const notifications =
         event.eventType === "provider.event"
           ? unwrapRunnerdProviderNotifications(eventPayload)
@@ -2346,6 +2404,13 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
                   typeof event.envelope.itemId === "string"
                     ? event.envelope.itemId
                     : "semantic-result",
+                )
+            : method === "thread/goal/updated" ||
+                method === "thread/goal/cleared"
+              ? rehydrateRunnerdGoalNotification(
+                  rawParams,
+                  this.#threadId,
+                  method,
                 )
             : event.eventType !== "provider.event" &&
                 (method === "item/started" || method === "item/completed")

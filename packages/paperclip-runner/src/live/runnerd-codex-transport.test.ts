@@ -22,6 +22,7 @@ import {
   defaultCapabilityRunnerdBinary,
   expandRunnerdCanonicalNotifications,
   latestRunnerdSessionReadiness,
+  rehydrateRunnerdGoalNotification,
   rehydrateRunnerdItemNotification,
   rehydrateRunnerdPlanNotification,
   rehydrateRunnerdResultNotification,
@@ -29,9 +30,11 @@ import {
   rehydrateRunnerdTurnNotification,
   rehydrateRunnerdUsageNotification,
   rehydrateRunnerdWorkspaceChangeNotification,
+  runnerdCanonicalNotificationMethod,
   resolveRunnerdSessionIdentity,
   resolveSourceCodexHome,
   trustedRuntimeReadOnlyRoots,
+  unseenRunnerdCommittedEvents,
   unwrapRunnerdProviderNotification,
   unwrapRunnerdProviderNotifications,
   withCodexCollaborationRuntimeInstructions,
@@ -468,6 +471,73 @@ it("rehydrates canonical workspace changes without reconstructing the diff", () 
     turnId: "turn-1",
     workspaceChange,
   });
+});
+
+it("rehydrates canonical session goals into Codex goal notifications", () => {
+  expect(
+    rehydrateRunnerdGoalNotification(
+      {
+        goal: {
+          objective: "Finish the browser lifecycle",
+          status: "complete",
+          tokenBudget: 20_000,
+          tokensUsed: 12_345,
+          elapsedSeconds: 42,
+        },
+        workingNow: false,
+      },
+      "thread-1",
+      "thread/goal/updated",
+    ),
+  ).toEqual({
+    threadId: "thread-1",
+    goal: {
+      threadId: "thread-1",
+      objective: "Finish the browser lifecycle",
+      status: "complete",
+      tokenBudget: 20_000,
+      tokensUsed: 12_345,
+      timeUsedSeconds: 42,
+      createdAt: 0,
+      updatedAt: 0,
+    },
+    workingNow: false,
+  });
+  expect(
+    rehydrateRunnerdGoalNotification(
+      { revision: 7, workingNow: false },
+      "thread-1",
+      "thread/goal/cleared",
+    ),
+  ).toEqual({ revision: 7, threadId: "thread-1", workingNow: false });
+});
+
+it("routes canonical session goals back through the Codex notification facade", () => {
+  expect(
+    runnerdCanonicalNotificationMethod("session.goal.updated", {
+      goal: { status: "complete" },
+    }),
+  ).toBe("thread/goal/updated");
+  expect(
+    runnerdCanonicalNotificationMethod("session.goal.snapshot", { goal: null }),
+  ).toBeUndefined();
+  expect(runnerdCanonicalNotificationMethod("session.goal.cleared", {})).toBe(
+    "thread/goal/cleared",
+  );
+});
+
+it("continues consuming after the durable committed-event window rolls", () => {
+  const rollingWindow = Array.from({ length: 64 }, (_, index) => ({
+    sourceSeq: index + 65,
+    eventType: index === 62 ? "session.goal.updated" : "item.delta",
+  }));
+  expect(unseenRunnerdCommittedEvents(rollingWindow, 64)).toEqual(
+    rollingWindow,
+  );
+  expect(unseenRunnerdCommittedEvents(rollingWindow, 128)).toEqual([]);
+  expect(() => unseenRunnerdCommittedEvents(rollingWindow, 63)).toThrow(
+    "provider_notification_window_exceeded",
+  );
 });
 
 it("resolves canonical and legacy durable session identities", () => {

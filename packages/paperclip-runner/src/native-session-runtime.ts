@@ -23,6 +23,7 @@ import type {
   PrpStructuredRunResult,
   PrpTerminalState,
 } from "./protocol/replay-contract.js";
+import { validatePrpStructuredRunResult } from "./protocol/replay-contract.js";
 import { parsePaperclipQuestionSet } from "./contracts/question-set.js";
 
 export const DEFAULT_NATIVE_RUNTIME_INPUT_LIVE_WINDOW_MS = 120_000;
@@ -685,6 +686,7 @@ async function retryQuarantinedSessionCleanups(
 async function consumeTurn(
   session: NativeSession,
   controlPlane: ControlPlanePort,
+  input: NativeExecutionInput,
   timeoutMs: number,
   runtimeInputLiveWindowMs: number,
   closeFailedSession: () => Promise<void>,
@@ -739,7 +741,10 @@ async function consumeTurn(
     let eventCount = 0;
     let highestContiguousSourceSeq = 0;
     let governedResult: PrpStructuredRunResult | null = null;
+    let semanticResultProposal: PrpStructuredRunResult | null = null;
+    let sessionGoalObserved = sessionGoal !== undefined;
     let goalControlObserved = false;
+    let latestSessionGoal: HarnessThreadGoal | null = null;
     while (true) {
       const next = await eventIterator.next();
       if (stopConsumer) throw new Error("native event consumer stopped");
@@ -771,6 +776,16 @@ async function consumeTurn(
         highestContiguousSourceSeq,
         receipt.highestContiguousSourceSeq,
       );
+      const eventGoal = goalFromEvent(event);
+      if (eventGoal !== undefined && eventGoal !== null) {
+        sessionGoalObserved = true;
+        latestSessionGoal = eventGoal;
+        if (sessionGoal === undefined) goalControlObserved = true;
+      }
+      if (event.eventType === "run.result.proposed") {
+        const validation = validatePrpStructuredRunResult(event.payload);
+        if (validation.ok) semanticResultProposal = validation.result;
+      }
       const request =
         payload.request &&
         typeof payload.request === "object" &&
@@ -848,7 +863,11 @@ async function consumeTurn(
           turnId: event.turnId ?? null,
           event,
         });
-        if (governedResult !== null && !isTurnTerminal(event)) {
+        if (
+          governedResult !== null &&
+          !isTurnTerminal(event) &&
+          !sessionGoalObserved
+        ) {
           if (session.cancel === undefined) {
             throw new Error("native_governed_wait_cancellation_unavailable");
           }
@@ -876,9 +895,8 @@ async function consumeTurn(
           };
         }
       }
-      if (sessionGoal) {
-        const eventGoal = goalFromEvent(event);
-        if (payload.requestId === sessionGoal.requestId) {
+      if (sessionGoalObserved) {
+        if (sessionGoal && payload.requestId === sessionGoal.requestId) {
           goalControlObserved = true;
         }
         if (
@@ -891,14 +909,35 @@ async function consumeTurn(
             event,
             eventCount,
             highestContiguousSourceSeq,
-            governedResult: sessionGoalResult(
-              sessionGoal.input,
-              eventGoal,
-              `Provider session goal settled as ${goalStatus(eventGoal) ?? "cleared"}.`,
-            ),
+            governedResult:
+              governedResult ??
+              semanticResultProposal ??
+              sessionGoalResult(
+                input,
+                eventGoal,
+                `Provider session goal settled as ${goalStatus(eventGoal) ?? "cleared"}.`,
+              ),
           };
         }
         if (isTurnTerminal(event)) {
+          if (
+            latestSessionGoal !== null &&
+            goalStatus(latestSessionGoal) !== "active"
+          ) {
+            return {
+              event,
+              eventCount,
+              highestContiguousSourceSeq,
+              governedResult:
+                governedResult ??
+                semanticResultProposal ??
+                sessionGoalResult(
+                  input,
+                  latestSessionGoal,
+                  `Provider session goal settled as ${goalStatus(latestSessionGoal) ?? "cleared"}.`,
+                ),
+            };
+          }
           if (!session.goal) throw new Error("native_session_goal_unavailable");
           const authoritativeGoal = await session.goal({ action: "get" });
           // `goal(get)` emits an authoritative goal snapshot. Keep consuming
@@ -906,6 +945,7 @@ async function consumeTurn(
           // cannot lag behind the synthetic heartbeat result.
           if (goalStatus(authoritativeGoal) === "active") continue;
           goalControlObserved = true;
+          latestSessionGoal = authoritativeGoal;
           continue;
         }
       }
@@ -1809,6 +1849,7 @@ export async function executeNativeSession(
           ? consumeTurn(
               session,
               options.controlPlane,
+              input,
               options.timeoutMs ?? 900_000,
               options.runtimeInputLiveWindowMs ??
                 DEFAULT_NATIVE_RUNTIME_INPUT_LIVE_WINDOW_MS,

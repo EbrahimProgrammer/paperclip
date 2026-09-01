@@ -245,8 +245,9 @@ describe("executeNativeSession recovery", () => {
           workingNow: false,
         });
         yield runnerEvent(3, "turn.started");
-        yield runnerEvent(4, "turn.completed");
-        yield runnerEvent(5, "session.goal.snapshot", {
+        yield runnerEvent(4, "run.result.proposed", result);
+        yield runnerEvent(5, "turn.completed");
+        yield runnerEvent(6, "session.goal.snapshot", {
           goal: {
             objective: completeGoal.objective,
             status: completeGoal.status,
@@ -340,6 +341,144 @@ describe("executeNativeSession recovery", () => {
     expect(appended.map((event) => event.eventType)).toContain("session.goal.snapshot");
     expect(completed.result).toMatchObject({
       reportedWorkDisposition: "done",
+      summary: result.summary,
+      completionClaim: { objectiveSatisfied: true },
+    });
+  });
+
+  it("reconciles an out-of-band goal before accepting a semantic result", async () => {
+    const activeGoal = {
+      threadId: "provider-agent-goal",
+      objective: "Finish autonomous work",
+      status: "active" as const,
+      tokenBudget: null,
+      tokensUsed: 100,
+      timeUsedSeconds: 1,
+      createdAt: Date.parse("2026-08-09T00:00:00.000Z"),
+      updatedAt: Date.parse("2026-08-09T00:00:01.000Z"),
+    };
+    const completeGoal = {
+      ...activeGoal,
+      status: "complete" as const,
+      tokensUsed: 500,
+      timeUsedSeconds: 2,
+      updatedAt: Date.parse("2026-08-09T00:00:02.000Z"),
+    };
+    const startTurn = vi.fn(async () => ({ turnId: "turn-agent-goal" }));
+    const goal = vi.fn(async () => completeGoal);
+    const session: NativeSession = {
+      identity: () => identity,
+      async capabilities() {
+        return {
+          resume: true,
+          typedEvents: true,
+          steering: false,
+          interruption: true,
+          structuredResult: true,
+        };
+      },
+      async *events() {
+        yield runnerEvent(1, "session.goal.updated", {
+          goal: {
+            objective: activeGoal.objective,
+            status: activeGoal.status,
+            tokenBudget: activeGoal.tokenBudget,
+            tokensUsed: activeGoal.tokensUsed,
+            elapsedSeconds: activeGoal.timeUsedSeconds,
+          },
+          workingNow: true,
+        });
+        yield runnerEvent(2, "run.result.proposed", result);
+        yield runnerEvent(3, "session.goal.updated", {
+          goal: {
+            objective: completeGoal.objective,
+            status: completeGoal.status,
+            tokenBudget: completeGoal.tokenBudget,
+            tokensUsed: completeGoal.tokensUsed,
+            elapsedSeconds: completeGoal.timeUsedSeconds,
+          },
+          workingNow: true,
+        });
+        yield runnerEvent(4, "turn.completed");
+      },
+      startTurn,
+      goal,
+      async result() {
+        return null;
+      },
+      async snapshot() {
+        return {
+          backendKind: "mock",
+          sessionId: "driver-agent-goal",
+          identity,
+          providerSessionId: activeGoal.threadId,
+          cursor: null,
+          activeTurnId: null,
+          pendingRuntimeRequests: [],
+          goal: activeGoal,
+          lineage: [],
+        };
+      },
+      async close() {},
+    };
+    const backend: NativeSessionBackend = {
+      async descriptor() {
+        return {
+          kind: "mock",
+          name: "agent-goal-backend",
+          version: "1",
+          capabilities: {
+            resume: true,
+            typedEvents: true,
+            steering: false,
+            interruption: true,
+            structuredResult: true,
+          },
+        };
+      },
+      async openSession() {
+        return session;
+      },
+    };
+    const appended: PrpEvent[] = [];
+    const port: ControlPlanePort = {
+      async openRun() {},
+      async checkpointSession() {},
+      async appendEvent(event) {
+        appended.push(event);
+        return {
+          cursor: event.sourceSeq,
+          highestContiguousSourceSeq: event.sourceSeq,
+          disposition: "committed",
+        };
+      },
+      async replayEvents() {
+        return { events: [], highestContiguousSourceSeq: 0 };
+      },
+      async completeRun() {},
+    };
+
+    const completed = await executeNativeSession({
+      input,
+      backend,
+      controlPlane: port,
+      runnerInstanceId: "runner-agent-goal",
+      controlPlaneInstanceId: "control-agent-goal",
+    });
+
+    expect(startTurn).toHaveBeenCalledOnce();
+    expect(goal).not.toHaveBeenCalled();
+    expect(appended.map((event) => event.eventType)).toEqual([
+      "session.goal.updated",
+      "run.result.proposed",
+      "session.goal.updated",
+      "turn.completed",
+      "run.result.accepted",
+      "run.terminal",
+    ]);
+    expect(completed.result).toMatchObject({
+      reportedWorkDisposition: "done",
+      summary: result.summary,
       completionClaim: { objectiveSatisfied: true },
     });
   });
@@ -481,7 +620,7 @@ describe("executeNativeSession recovery", () => {
       action: "pause",
       requestId: "goal-pause",
     });
-    expect(goal).toHaveBeenNthCalledWith(2, { action: "get" });
+    expect(goal).toHaveBeenCalledTimes(1);
     expect(completed.result).toMatchObject({
       reportedWorkDisposition: "yielded",
       completionClaim: { objectiveSatisfied: false },
