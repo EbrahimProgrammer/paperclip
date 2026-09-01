@@ -1834,6 +1834,33 @@ describe("Codex app-server Codex driver", () => {
     }
   });
 
+  it("preserves an inactive goal status while editing its objective", async () => {
+    const transport = new FakeCodexTransport();
+    const session = await makeDriver([transport]).openSession({
+      runId: "run-goal-inactive-edit",
+      normalizedSessionId: "normalized-goal-inactive-edit",
+      workingDirectory: TEST_WORKING_DIRECTORY,
+    });
+
+    await session.goal?.({
+      action: "set",
+      objective: "Updated while paused",
+      status: "paused",
+    });
+
+    expect(
+      transport.calls.filter(({ method }) => method === "thread/goal/set"),
+    ).toContainEqual({
+      method: "thread/goal/set",
+      params: {
+        threadId: "thread-1",
+        objective: "Updated while paused",
+        status: "paused",
+      },
+    });
+    await session.close({ reason: "fixture complete" });
+  });
+
   it("preserves a provider-neutral goal action subset through the Codex transport facade", async () => {
     const transport = new FakeCodexTransport();
     const driver = makeDriver([transport], {

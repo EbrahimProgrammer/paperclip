@@ -672,7 +672,7 @@ it("controls a Codex session goal end to end through durable PRP v2", async () =
   const bundle = createCapabilityRunnerdCodexTransport({
     runnerBinary: defaultCapabilityRunnerdBinary(),
     codexCommand: fakeCodex,
-    codexArgs: fakeCodexArgs(stateDirectory),
+    codexArgs: fakeCodexArgs(stateDirectory, "--goal-autostart"),
     stateDirectory,
   });
   bundle.transport.setServerRequestHandler(async () => ({
@@ -710,6 +710,40 @@ it("controls a Codex session goal end to end through durable PRP v2", async () =
         objective: "Finish the durable PRP goal test",
         status: "active",
         tokenBudget: 12_000,
+      },
+    });
+    let durableGoalEvent: Record<string, unknown> | null = null;
+    let durableTurnStarted = false;
+    const deliveryDeadline = Date.now() + 5_000;
+    while (Date.now() < deliveryDeadline) {
+      const controlState = JSON.parse(
+        await readFile(
+          join(stateDirectory, "control-plane", "control-plane-state.json"),
+          "utf8",
+        ),
+      ) as {
+        committedEvents?: Array<Record<string, unknown>>;
+      };
+      durableGoalEvent =
+        controlState.committedEvents?.find(
+          (event) => event.eventType === "session.goal.updated",
+        ) ?? null;
+      durableTurnStarted =
+        controlState.committedEvents?.some(
+          (event) => event.eventType === "turn.started",
+        ) ?? false;
+      if (durableGoalEvent !== null && durableTurnStarted) break;
+      await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+    }
+    expect(durableGoalEvent).not.toBeNull();
+    expect(durableTurnStarted).toBe(true);
+    expect(durableGoalEvent).toMatchObject({
+      envelope: {
+        payload: {
+          payload: {
+            goal: { lastReason: null },
+          },
+        },
       },
     });
     await expect(

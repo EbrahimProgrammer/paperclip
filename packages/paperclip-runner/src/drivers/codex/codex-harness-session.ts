@@ -470,7 +470,7 @@ export class CodexHarnessSession extends CodexSessionState implements HarnessSes
         params = {
           ...params,
           objective: input.objective,
-          status: "active",
+          status: input.status ?? "active",
           ...(input.tokenBudget !== undefined
             ? { tokenBudget: input.tokenBudget }
             : {}),

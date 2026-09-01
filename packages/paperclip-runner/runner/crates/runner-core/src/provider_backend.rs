@@ -403,7 +403,7 @@ struct SessionGoalSnapshot {
     tokens_used: u64,
     elapsed_seconds: u64,
     iterations: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     last_reason: Option<String>,
     created_at: Option<String>,
     updated_at: Option<String>,
@@ -3145,6 +3145,35 @@ impl CommandExecutor for CodexCommandExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn goal_snapshot_serializes_required_nullable_fields() {
+        let goal = SessionGoalSnapshot {
+            objective: "Finish the durable goal.".to_owned(),
+            status: "active".to_owned(),
+            token_budget: None,
+            tokens_used: 0,
+            elapsed_seconds: 0,
+            iterations: 0,
+            last_reason: None,
+            created_at: None,
+            updated_at: None,
+            completed_at: None,
+            working_now: true,
+        };
+
+        let payload = goal_event_payload(Some(&goal), None, 1);
+
+        for path in [
+            "/goal/tokenBudget",
+            "/goal/lastReason",
+            "/goal/createdAt",
+            "/goal/updatedAt",
+            "/goal/completedAt",
+        ] {
+            assert_eq!(payload.pointer(path), Some(&Value::Null), "{path}");
+        }
+    }
 
     #[test]
     fn rejects_inconsistent_provider_state() {
