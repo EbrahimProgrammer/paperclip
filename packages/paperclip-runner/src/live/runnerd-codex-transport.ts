@@ -1774,17 +1774,12 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
       controlPlaneDirectory,
       desiredIdentity,
     );
-    if (
-      identity.runId !== desiredIdentity.runId ||
-      identity.turnId !== desiredIdentity.turnId ||
-      identity.itemId !== desiredIdentity.itemId
-    ) {
-      // PRP identity is the authorization boundary for every command, event,
-      // and semantic receipt. Reusing a provider process for another run needs
-      // a crash-safe credential and durable-state rotation on both peers; do
-      // not pretend that a provider-only attachment changed that authority.
-      throw new Error("native_runner_prp_run_rotation_unavailable");
-    }
+    // The durable runner journal remains under its immutable original run
+    // identity. A successor Paperclip heartbeat wraps rehydrated provider
+    // notifications in its own outer PRP authority, so cold recovery must use
+    // the stored inner identity rather than replacing the provider session.
+    // recoveredControlPlaneIdentity already proves the stable runner, lease,
+    // and normalized-session binding before this boundary is crossed.
     const runnerBinaryPath =
       this.options.runnerBinary ?? defaultCapabilityRunnerdBinary();
     const runnerArtifact = approvedRunnerArtifact(runnerBinaryPath);

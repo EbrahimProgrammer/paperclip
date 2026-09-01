@@ -1085,23 +1085,26 @@ function readRunnerdDurableIdentity(
   root: string,
 ): Record<string, unknown> | null {
   if (!isSafeNativeStateDirectory(root)) return null;
-  const statePath = resolve(root, "control-plane", "mock-core-state.json");
-  if (!existsSync(statePath)) return null;
-  try {
-    return record(
-      record(
-        JSON.parse(
-          readBoundedNativeFile(
-            statePath,
-            NATIVE_DURABLE_IDENTITY_MAX_BYTES,
-            "runner_durable_identity_too_large",
-          ).toString("utf8"),
-        ),
-      ).identity,
-    );
-  } catch {
-    return null;
+  for (const name of ["control-plane-state.json", "mock-core-state.json"]) {
+    const statePath = resolve(root, "control-plane", name);
+    if (!existsSync(statePath)) continue;
+    try {
+      return record(
+        record(
+          JSON.parse(
+            readBoundedNativeFile(
+              statePath,
+              NATIVE_DURABLE_IDENTITY_MAX_BYTES,
+              "runner_durable_identity_too_large",
+            ).toString("utf8"),
+          ),
+        ).identity,
+      );
+    } catch {
+      return null;
+    }
   }
+  return null;
 }
 
 function durableIdentityMatchesExecution(
@@ -1111,6 +1114,22 @@ function durableIdentityMatchesExecution(
   return Boolean(
     identity &&
       identity.runId === execution.binding.runId &&
+      identity.normalizedSessionId === nativeSessionKey(execution) &&
+      typeof identity.runnerInstanceId === "string" &&
+      identity.runnerInstanceId.length > 0 &&
+      typeof identity.environmentLeaseId === "string" &&
+      identity.environmentLeaseId.length > 0,
+  );
+}
+
+function durableSessionIdentityMatchesExecution(
+  identity: Record<string, unknown> | null,
+  execution: NativeExecutionInput,
+): identity is RunnerdDurableIdentity {
+  return Boolean(
+    identity &&
+      typeof identity.runId === "string" &&
+      identity.runId.length > 0 &&
       identity.normalizedSessionId === nativeSessionKey(execution) &&
       typeof identity.runnerInstanceId === "string" &&
       identity.runnerInstanceId.length > 0 &&
@@ -1147,7 +1166,7 @@ function loadRunnerdDurableBinding(execution: NativeExecutionInput): {
   environmentLeaseId: string;
 } | null {
   const identity = readRunnerdDurableIdentity(runnerdStateRoot(execution));
-  if (!durableIdentityMatchesExecution(identity, execution)) return null;
+  if (!durableSessionIdentityMatchesExecution(identity, execution)) return null;
   return {
     runnerInstanceId: identity.runnerInstanceId,
     environmentLeaseId: identity.environmentLeaseId,

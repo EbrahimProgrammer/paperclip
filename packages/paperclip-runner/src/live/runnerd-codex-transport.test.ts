@@ -1263,7 +1263,7 @@ it("does not expose cross-run attachment before PRP authority can rotate atomica
   }
 }, 30_000);
 
-it("cold-restores a suspended provider session under its durable run binding", async () => {
+it("cold-restores a paused goal for a successor run without replacing its provider session", async () => {
   const stateDirectory = await mkdtemp(join(tmpdir(), "runnerd-cold-attach-"));
   const skillRoot = join(stateDirectory, "runtime-skill");
   const instructionRoot = join(stateDirectory, "runtime-instructions");
@@ -1285,6 +1285,7 @@ it("cold-restores a suspended provider session under its durable run binding", a
       stateDirectory,
       "--include-skill-instructions",
       "--durable-turn-ids",
+      "--goal-autostart",
     ),
     stateDirectory,
     lifecyclePolicy: { mode: "per_turn" as const, idleTimeoutMs: null },
@@ -1316,12 +1317,12 @@ it("cold-restores a suspended provider session under its durable run binding", a
     });
     expect((await stat(join(stateDirectory, "codex-home", "skills", "assigned"))).mode & 0o222).toBe(0);
     expect((await stat(join(stateDirectory, "codex-home", "skills", "assigned", "SKILL.md"))).mode & 0o222).toBe(0);
-    await first.transport.request("turn/start", {
-      input: [{ type: "text", text: "first process" }],
-    });
-    for await (const event of first.transport.notifications()) {
-      if (event.method === "turn/completed") break;
-    }
+    await expect(
+      first.transport.request("thread/goal/set", {
+        objective: "Resume this goal in the successor run.",
+        status: "paused",
+      }),
+    ).resolves.toMatchObject({ goal: { status: "paused" } });
   } finally {
     await first.transport.close();
   }
@@ -1344,32 +1345,41 @@ it("cold-restores a suspended provider session under its durable run binding", a
         "utf8",
       ),
     ) as Record<string, unknown>;
-  const mismatched = createCapabilityRunnerdCodexTransport({
-    ...options,
-    runnerStateDirectory: externallyOwnedRunnerStateDirectory,
-    readRunnerState,
-    resumeDynamicTools: dynamicTools,
-    prpIdentity: { ...baseIdentity, runId: "run-cold-other" },
-  });
-  await expect(
-    mismatched.transport.request("thread/read", {}),
-  ).rejects.toThrow("native_runner_prp_run_rotation_unavailable");
-  await mismatched.transport.close();
-
   const restored = createCapabilityRunnerdCodexTransport({
     ...options,
     runnerStateDirectory: externallyOwnedRunnerStateDirectory,
     readRunnerState,
     resumeDynamicTools: dynamicTools,
-    prpIdentity: baseIdentity,
+    prpIdentity: {
+      ...baseIdentity,
+      runId: "run-cold-successor",
+      turnId: "turn-cold-successor",
+      itemId: "item-cold-successor",
+    },
   });
   restored.transport.setServerRequestHandler(async () => ({
     success: true,
     contentItems: [],
   }));
   try {
+    expect(
+      JSON.parse(
+        await readFile(
+          join(stateDirectory, "control-plane", "control-plane-state.json"),
+          "utf8",
+        ),
+      ).identity,
+    ).toEqual(baseIdentity);
     const read = await restored.transport.request("thread/read", {});
     expect(read.thread).toMatchObject({ id: "codex-thread-1" });
+    await expect(
+      restored.transport.request("thread/goal/get", {}),
+    ).resolves.toMatchObject({
+      goal: {
+        objective: "Resume this goal in the successor run.",
+        status: "paused",
+      },
+    });
     expect((await stat(join(stateDirectory, "codex-home", "skills", "assigned"))).mode & 0o222).toBe(0);
     expect((await stat(join(stateDirectory, "codex-home", "skills", "assigned", "SKILL.md"))).mode & 0o222).toBe(0);
     const providerState = JSON.parse(
@@ -1381,12 +1391,16 @@ it("cold-restores a suspended provider session under its durable run binding", a
     expect(Object.keys(providerState.toolBridge?.authorized ?? {})).toEqual(
       ["get_task_context"],
     );
-    await restored.transport.request("turn/start", {
-      input: [{ type: "text", text: "restored process" }],
-    });
+    await expect(
+      restored.transport.request("thread/goal/set", { status: "active" }),
+    ).resolves.toMatchObject({ goal: { status: "active" } });
+    let resumedGoalTurnId: string | null = null;
     for await (const event of restored.transport.notifications()) {
-      if (event.method === "turn/completed") break;
+      if (event.method !== "turn/started") continue;
+      resumedGoalTurnId = String(event.params.turnId ?? event.params.turn?.id ?? "");
+      break;
     }
+    expect(resumedGoalTurnId).toBe("provider-goal-turn-1");
     expect(restored.evidence()).toMatchObject({
       runnerExited: false,
       codexPid: expect.any(Number),

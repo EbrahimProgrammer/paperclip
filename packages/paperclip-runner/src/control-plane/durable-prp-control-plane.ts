@@ -376,7 +376,8 @@ function isStoredCoreState(
     !commands.every(
       (command, index) =>
         isRecord(command) &&
-        command.schema === "paperclip.prp.command.v1" &&
+        (command.schema === "paperclip.prp.command.v1" ||
+          command.schema === "paperclip.prp.command.v2") &&
         typeof command.commandId === "string" &&
         stableIdPattern.test(command.commandId) &&
         command.commandId.length <= 160 &&
