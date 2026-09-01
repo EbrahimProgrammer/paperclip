@@ -88,15 +88,30 @@ describe("side-panel shell controls", () => {
     expect(onToggle).toHaveBeenCalledOnce();
   });
 
-  it("supports the task-detail header height without changing the shared default", async () => {
+  it("keeps the task-detail frame borderless except for its docked left edge", async () => {
     await act(async () => root.render(
-      <SidePanelFrame header={<div>Tabs</div>} headerSize="task-detail">
+      <SidePanelFrame header={<div>Tabs</div>} footer={<div>Actions</div>} headerSize="task-detail">
         Body
       </SidePanelFrame>,
     ));
-    expect(container.querySelector("header")?.className).toContain("h-(--sz-60px)");
-    expect(container.querySelector("header")?.className).toContain("border-b");
-    expect(container.querySelector("header")?.className).not.toContain("h-(--side-panel-header-height)");
+    const frame = container.querySelector("section")!;
+    const header = container.querySelector("header")!;
+    const footer = container.querySelector("footer")!;
+    expect(frame.className).toContain("border-l");
+    expect(header.className).toContain("h-(--sz-60px)");
+    expect(header.className).not.toContain("border-b");
+    expect(header.className).not.toContain("h-(--side-panel-header-height)");
+    expect(footer.className).not.toContain("border-t");
+  });
+
+  it("preserves the shared default header and footer treatment", async () => {
+    await act(async () => root.render(
+      <SidePanelFrame header={<div>Tabs</div>} footer={<div>Actions</div>}>
+        Body
+      </SidePanelFrame>,
+    ));
+    expect(container.querySelector("header")?.className).toContain("h-(--side-panel-header-height)");
+    expect(container.querySelector("footer")?.className).toContain("border-t");
   });
 
   it("keeps the prose scrollbar on the full-width viewport while centering its content", async () => {

@@ -199,7 +199,8 @@ export function BreadcrumbBar({ taskDetailLayout = false }: { taskDetailLayout?:
   return (
     <div
       className={cn(
-        "relative shrink-0 border-b border-border flex items-center",
+        "relative shrink-0 flex items-center",
+        !taskDetailLayout && "border-b border-border",
         taskDetailLayout ? "h-(--sz-60px) px-3" : "h-12 px-4 md:px-6",
       )}
     >

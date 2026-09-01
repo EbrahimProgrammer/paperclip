@@ -279,6 +279,7 @@
   --side-panel-header-height: var(--sz-48px);
   --side-panel-tab-height: var(--sz-30px);
   --side-panel-streamlined-tab-min-width: var(--sz-72px);
+  --side-panel-streamlined-tab-max-width: var(--sz-160px);
   --side-panel-tab-edge-fade-width: var(--sz-32px);
   --side-panel-tab-label-max-width: var(--sz-100px);
   --side-panel-tab-label-expanded-max-width: calc(var(--side-panel-tab-label-max-width) + var(--sz-18px));
@@ -288,6 +289,7 @@
   --side-panel-launcher-width: var(--sz-320px);
   --side-panel-bg: var(--background);
   --side-panel-fg: var(--foreground);
+  --streamlined-task-detail-bg: var(--background);
   --side-panel-tab-active-bg: color-mix(in oklab, var(--accent) 88%, var(--background));
   --side-panel-tab-hover-bg: color-mix(in oklab, var(--accent) 58%, transparent);
   --shadow-task-composer: 0 4px 16px 18px rgb(0 0 0 / 10%);
@@ -335,6 +337,7 @@
   --foreground: oklch(0.985 0 0);
   --side-panel-bg: rgb(10 10 10);
   --side-panel-fg: oklch(0.985 0 0);
+  --streamlined-task-detail-bg: #171717;
   --card: oklch(0.205 0 0);
   --card-foreground: oklch(0.985 0 0);
   --popover: oklch(0.205 0 0);
@@ -389,6 +392,11 @@
   --status-task-icon-in_review: #9474f0;  /* deeper than violet-400, reads purple */
   --status-task-icon-done: #34d06f;
   --status-task-icon-cancelled: #9a958a;
+}
+
+.streamlined-task-detail-surface {
+  --side-panel-bg: var(--streamlined-task-detail-bg);
+  background-color: var(--streamlined-task-detail-bg);
 }
 
 ::highlight(paperclip-doc-annotation-open) {

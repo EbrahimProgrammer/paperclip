@@ -325,6 +325,34 @@ describe("Layout", () => {
     });
   });
 
+  it("scopes the Streamlined task-detail surface to the main pane and right sidebar row", async () => {
+    currentPathname = "/PAP/issues/PAP-1";
+    mockInstanceSettingsApi.getExperimental.mockResolvedValue({
+      enableApps: true,
+      enableStreamlinedUi: true,
+    });
+    const root = createRoot(container);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <Layout />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    expect(container.querySelector(".streamlined-task-detail-surface")).not.toBeNull();
+    expect(container.querySelector("#main-content")?.classList.contains("pt-0")).toBe(true);
+    expect(container.querySelector("#main-content")?.classList.contains("md:pt-0")).toBe(true);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
   it("collapses atomically when the pointer is still over the sidebar (no re-peek) — PAP-10676", async () => {
     const root = createRoot(container);
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });

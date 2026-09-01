@@ -139,6 +139,7 @@ describe("BreadcrumbBar", () => {
     const identifier = container.querySelector('[data-slot="task-title-identifier"]');
     expect(identifier).toBeTruthy();
     expect(identifier?.className).not.toContain("absolute");
+    expect(identifier?.closest(".relative")?.className).not.toContain("border-b");
 
     const title = Array.from(container.querySelectorAll("span"))
       .find((element) => element.textContent === "Hire your first engineer and create a hiring plan");

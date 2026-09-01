@@ -713,7 +713,10 @@ export function Layout() {
               </div>
             ) : null}
           </div>
-          <div className={cn(isMobile ? "block" : "flex flex-1 min-h-0")}>
+          <div className={cn(
+            isMobile ? "block" : "flex flex-1 min-h-0",
+            !isMobile && useStreamlinedTaskDetailShell && "streamlined-task-detail-surface",
+          )}>
             <div className={cn(!isMobile && useStreamlinedTaskDetailShell ? "flex min-w-0 flex-1 flex-col" : "contents")}>
               {!isMobile && useStreamlinedTaskDetailShell ? (
                 <>
@@ -741,6 +744,10 @@ export function Layout() {
               }
               className={cn(
                 "flex-1 p-4 outline-none md:p-6",
+                // The task thread owns its scrollable top spacing. Leaving the
+                // page shell's top padding in place creates a stationary dark
+                // strip below the breadcrumb while messages scroll behind it.
+                !isMobile && useStreamlinedTaskDetailShell && "pt-0 md:pt-0",
                 // Reserve the scrollbar gutter on desktop so pages whose height
                 // changes (e.g. switching skill-detail tabs) don't widen/shift
                 // when the vertical scrollbar appears or disappears (PAP-10907).

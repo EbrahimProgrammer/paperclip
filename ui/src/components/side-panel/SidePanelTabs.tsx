@@ -52,7 +52,7 @@ function SortableSidePanelTab({ tab, active, appearance, showLeadingSeparator, o
       }}
       className={cn(
         appearance === "streamlined-task"
-          ? "relative flex min-w-(--side-panel-streamlined-tab-min-width) flex-1 basis-0 items-center"
+          ? "relative flex min-w-(--side-panel-streamlined-tab-min-width) max-w-(--side-panel-streamlined-tab-max-width) flex-1 basis-0 items-center"
           : "relative",
         sortable.isDragging && "z-20 opacity-80",
       )}

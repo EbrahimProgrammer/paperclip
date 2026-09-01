@@ -92,7 +92,7 @@ export function SidePanelTab({
         className,
       )}
     >
-      <Tooltip>
+      <Tooltip open={labelIsTruncated ? undefined : false}>
         <TooltipTrigger asChild>
           <button
             {...dragHandleProps}
@@ -100,6 +100,7 @@ export function SidePanelTab({
             type="button"
             role="tab"
             data-side-panel-tab-target={id}
+            data-side-panel-tab-tooltip={labelIsTruncated ? "enabled" : "disabled"}
             id={`side-panel-tab-${id}`}
             aria-controls={`side-panel-content-${id}`}
             aria-selected={active}
@@ -146,7 +147,7 @@ export function SidePanelTab({
             ) : null}
           </button>
         </TooltipTrigger>
-        <TooltipContent side="bottom">{label}</TooltipContent>
+        {labelIsTruncated ? <TooltipContent side="bottom">{label}</TooltipContent> : null}
       </Tooltip>
       {closable && onClose && (appearance === "streamlined-task" || active) ? (
         <button

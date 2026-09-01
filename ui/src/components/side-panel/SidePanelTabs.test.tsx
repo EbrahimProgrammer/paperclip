@@ -135,6 +135,8 @@ describe("SidePanelTabs", () => {
     expect(propertiesWrapper?.style.width).toBe("");
     expect(propertiesWrapper?.parentElement?.className)
       .toContain("min-w-(--side-panel-streamlined-tab-min-width)");
+    expect(propertiesWrapper?.parentElement?.className)
+      .toContain("max-w-(--side-panel-streamlined-tab-max-width)");
 
     const planLabel = container.querySelector<HTMLElement>('[data-side-panel-tab-target="document:plan"] span');
     expect(planLabel?.className).toContain("task-detail-pane-tab-label");
@@ -154,6 +156,39 @@ describe("SidePanelTabs", () => {
     expect(addButton?.className).toContain("h-(--side-panel-tab-height)");
     expect(addButton?.className).toContain("w-(--side-panel-tab-height)");
     expect(addButton?.className).toContain("hover:bg-accent");
+  });
+
+  it("enables the tab flyout only while its label is truncated", () => {
+    const scrollWidth = vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockReturnValue(72);
+    const clientWidth = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(96);
+
+    const renderLabel = (label: string) => {
+      act(() => {
+        root.render(
+          <TooltipProvider>
+            <SidePanelTabs
+              tabs={[{ id: "properties", type: "view", label, closable: true }]}
+              activeTabId="properties"
+              onActiveTabChange={vi.fn()}
+              onCloseTab={vi.fn()}
+              appearance="streamlined-task"
+            />
+          </TooltipProvider>,
+        );
+      });
+    };
+
+    renderLabel("Properties");
+    const tab = container.querySelector<HTMLButtonElement>('[data-side-panel-tab-target="properties"]')!;
+    const label = tab.querySelector<HTMLElement>(".task-detail-pane-tab-label")!;
+    expect(tab.dataset.sidePanelTabTooltip).toBe("disabled");
+    expect(label.dataset.truncated).toBeUndefined();
+
+    scrollWidth.mockReturnValue(128);
+    clientWidth.mockReturnValue(72);
+    renderLabel("Properties panel");
+    expect(tab.dataset.sidePanelTabTooltip).toBe("enabled");
+    expect(label.dataset.truncated).toBe("true");
   });
 
   it("fades the right edge only while more Streamlined tabs remain", () => {
