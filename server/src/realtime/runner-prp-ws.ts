@@ -29,12 +29,26 @@ interface RegisteredAuthority {
   >;
 }
 
+interface CurrentLiveAuthority {
+  readonly runId: string;
+  readonly generation: symbol;
+}
+
 interface RunnerPrpUpgradeRequest extends IncomingMessage {
   paperclipWebSocketHandled?: boolean;
 }
 
 const registrations = new Map<string, RegisteredAuthority>();
+const currentLiveAuthorities = new Map<string, CurrentLiveAuthority>();
 let loopbackOrigin: string | null = null;
+
+function liveAuthorityKey(input: {
+  readonly companyId: string;
+  readonly issueId: string;
+  readonly agentId: string;
+}): string {
+  return JSON.stringify([input.companyId, input.issueId, input.agentId]);
+}
 
 function rejectUpgrade(
   socket: Duplex,
@@ -117,19 +131,42 @@ export async function registerRunnerPrpAuthority(input: {
     throw new Error("runner_prp_authority_already_registered");
   }
   const generation = Symbol(input.runId);
-  registrations.set(input.runId, {
+  const registeredAuthority: RegisteredAuthority = {
     companyId: input.companyId,
     issueId: input.issueId ?? null,
     agentId: input.agentId ?? null,
     authority: input.authority,
     generation,
     runtimeRequestResolutions: new Map(),
-  });
+  };
+  registrations.set(input.runId, registeredAuthority);
+  const currentKey = input.issueId && input.agentId
+    ? liveAuthorityKey({
+        companyId: input.companyId,
+        issueId: input.issueId,
+        agentId: input.agentId,
+      })
+    : null;
+  if (currentKey !== null) {
+    currentLiveAuthorities.set(currentKey, {
+      runId: input.runId,
+      generation,
+    });
+  }
   return {
     connectUrl: `${loopbackOrigin}${CONNECT_PATH_PREFIX}${input.runId}`,
     release: async () => {
       if (registrations.get(input.runId)?.generation === generation) {
         registrations.delete(input.runId);
+      }
+      if (currentKey !== null) {
+        const current = currentLiveAuthorities.get(currentKey);
+        if (
+          current?.runId === input.runId &&
+          current.generation === generation
+        ) {
+          currentLiveAuthorities.delete(currentKey);
+        }
       }
     },
   };
@@ -148,13 +185,11 @@ export function queueLiveRunnerPrpCommand(input: {
   controllerSeq: number;
   completion: Promise<Record<string, unknown> | null>;
 } | null {
-  const registration = [...registrations.entries()].find(([, candidate]) =>
-    candidate.companyId === input.companyId &&
-    candidate.issueId === input.issueId &&
-    candidate.agentId === input.agentId
-  );
-  if (!registration) return null;
-  const [runId, binding] = registration;
+  const current = currentLiveAuthorities.get(liveAuthorityKey(input));
+  if (!current) return null;
+  const binding = registrations.get(current.runId);
+  if (!binding || binding.generation !== current.generation) return null;
+  const runId = current.runId;
   const command = binding.authority.queueCommand(
     input.type,
     input.payload ?? {},
@@ -278,6 +313,7 @@ export const runnerPrpWebSocketInternals = {
   },
   resetForTests(): void {
     registrations.clear();
+    currentLiveAuthorities.clear();
     loopbackOrigin = null;
   },
 };
