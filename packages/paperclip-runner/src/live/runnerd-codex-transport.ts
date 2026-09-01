@@ -340,6 +340,21 @@ export function unwrapRunnerdProviderNotification(
   return notifications.at(-1) ?? record(input);
 }
 
+export function latestRunnerdSessionReadiness(
+  events: readonly unknown[],
+): Record<string, unknown> | null {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = record(events[index]);
+    if (
+      event.eventType !== "harness.ready" &&
+      event.eventType !== "session.started" &&
+      event.eventType !== "session.resumed"
+    ) continue;
+    return record(record(record(event.envelope).payload).payload);
+  }
+  return null;
+}
+
 export function expandRunnerdCanonicalNotifications(
   method: string,
   input: unknown,
@@ -1043,6 +1058,7 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
   #threadId = "";
   #sessionId: string | null = null;
   #providerIdentity: Record<string, unknown> | null = null;
+  #persistedProviderReadinessAdopted = false;
   #turnId = "";
   #durableTurnId = "";
   #authorizedTools: Record<string, unknown> | null = null;
@@ -1850,6 +1866,16 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
       connectionLeaseTtlMs: 60 * 60 * 1_000,
     });
     this.#core = core;
+    const persistedReadiness = latestRunnerdSessionReadiness(
+      core.store.state.committedEvents,
+    );
+    if (persistedReadiness !== null) {
+      // Fully acknowledged durable journals do not necessarily emit another
+      // ready event when runnerd reconnects. Adopt the last committed provider
+      // identity before advancing the live cursor, without replaying old
+      // notifications into the outer run authority.
+      this.#adoptProviderReadiness(persistedReadiness, { persisted: true });
+    }
     this.#eventIndex = core.store.state.committedEvents.length;
     const registration = this.options.controlPlaneRegistration
       ? await this.options.controlPlaneRegistration(core)
@@ -1997,7 +2023,8 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
       this.#pumpEvents();
       if (
         this.#threadId.length > 0 &&
-        (this.#evidence.providerExecutionKind === "remote_service" ||
+        (this.#persistedProviderReadinessAdopted ||
+          this.#evidence.providerExecutionKind === "remote_service" ||
           this.#evidence.providerPid !== null)
       )
         return;
@@ -2032,6 +2059,64 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
     );
   }
 
+  #adoptProviderReadiness(
+    started: Record<string, unknown>,
+    options: { persisted?: boolean } = {},
+  ): void {
+    const runtimeIdentity = record(started.runtimeIdentity);
+    const descriptor = record(started.providerDescriptor);
+    const {
+      processId: pid,
+      threadId,
+      sessionId,
+    } = resolveRunnerdSessionIdentity(started);
+    const providerIdentity = record(started.providerIdentity);
+    if (!options.persisted && pid !== null) {
+      this.#evidence.providerPid = pid;
+      if (descriptor.driver === "acpx_runtime")
+        this.#evidence.sidecarPid = pid;
+      else this.#evidence.codexPid = pid;
+    }
+    if (typeof descriptor.driver === "string")
+      this.#evidence.providerDriver = descriptor.driver;
+    if (typeof descriptor.providerVersion === "string")
+      this.#evidence.providerVersion = descriptor.providerVersion;
+    if (
+      descriptor.agent === "pi" ||
+      descriptor.agent === "claude" ||
+      descriptor.agent === "codex"
+    )
+      this.#evidence.acpxAgent = descriptor.agent;
+    if (typeof descriptor.agentServerVersion === "string")
+      this.#evidence.agentServerVersion = descriptor.agentServerVersion;
+    if (typeof descriptor.agentRuntimeVersion === "string")
+      this.#evidence.agentRuntimeVersion = descriptor.agentRuntimeVersion;
+    if (typeof descriptor.acpProtocolVersion === "number")
+      this.#evidence.acpProtocolVersion = descriptor.acpProtocolVersion;
+    if (!options.persisted && typeof descriptor.agentProcessId === "number")
+      this.#evidence.agentPid = descriptor.agentProcessId;
+    if (
+      runtimeIdentity.executionKind === "local_process" ||
+      runtimeIdentity.executionKind === "remote_service"
+    ) {
+      this.#evidence.providerExecutionKind = runtimeIdentity.executionKind;
+    }
+    if (runtimeIdentity.service === "anthropic_managed_agents") {
+      this.#evidence.providerService = "anthropic_managed_agents";
+    } else if (
+      runtimeIdentity.service === "aws_bedrock_agentcore_harness"
+    ) {
+      this.#evidence.providerService = "aws_bedrock_agentcore_harness";
+    }
+    if (threadId !== null) this.#threadId = threadId;
+    if (sessionId !== null) this.#sessionId = sessionId;
+    if (typeof providerIdentity.kind === "string") {
+      this.#providerIdentity = structuredClone(providerIdentity);
+    }
+    this.#persistedProviderReadinessAdopted = options.persisted === true;
+    this.#publish();
+  }
+
   #pumpEvents(): void {
     this.#flushPendingTraceRehydrations();
     const events = this.#core?.store.state.committedEvents ?? [];
@@ -2043,57 +2128,7 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
         event.eventType === "session.resumed"
       ) {
         const started = record(record(event.envelope.payload).payload);
-        const runtimeIdentity = record(started.runtimeIdentity);
-        const descriptor = record(started.providerDescriptor);
-        const {
-          processId: pid,
-          threadId,
-          sessionId,
-        } = resolveRunnerdSessionIdentity(started);
-        const providerIdentity = record(started.providerIdentity);
-        if (pid !== null) {
-          this.#evidence.providerPid = pid;
-          if (descriptor.driver === "acpx_runtime")
-            this.#evidence.sidecarPid = pid;
-          else this.#evidence.codexPid = pid;
-        }
-        if (typeof descriptor.driver === "string")
-          this.#evidence.providerDriver = descriptor.driver;
-        if (typeof descriptor.providerVersion === "string")
-          this.#evidence.providerVersion = descriptor.providerVersion;
-        if (
-          descriptor.agent === "pi" ||
-          descriptor.agent === "claude" ||
-          descriptor.agent === "codex"
-        )
-          this.#evidence.acpxAgent = descriptor.agent;
-        if (typeof descriptor.agentServerVersion === "string")
-          this.#evidence.agentServerVersion = descriptor.agentServerVersion;
-        if (typeof descriptor.agentRuntimeVersion === "string")
-          this.#evidence.agentRuntimeVersion = descriptor.agentRuntimeVersion;
-        if (typeof descriptor.acpProtocolVersion === "number")
-          this.#evidence.acpProtocolVersion = descriptor.acpProtocolVersion;
-        if (typeof descriptor.agentProcessId === "number")
-          this.#evidence.agentPid = descriptor.agentProcessId;
-        if (
-          runtimeIdentity.executionKind === "local_process" ||
-          runtimeIdentity.executionKind === "remote_service"
-        ) {
-          this.#evidence.providerExecutionKind = runtimeIdentity.executionKind;
-        }
-        if (runtimeIdentity.service === "anthropic_managed_agents") {
-          this.#evidence.providerService = "anthropic_managed_agents";
-        } else if (
-          runtimeIdentity.service === "aws_bedrock_agentcore_harness"
-        ) {
-          this.#evidence.providerService = "aws_bedrock_agentcore_harness";
-        }
-        if (threadId !== null) this.#threadId = threadId;
-        if (sessionId !== null) this.#sessionId = sessionId;
-        if (typeof providerIdentity.kind === "string") {
-          this.#providerIdentity = structuredClone(providerIdentity);
-        }
-        this.#publish();
+        this.#adoptProviderReadiness(started);
         continue;
       }
       if (event.eventType === "harness.diagnostic") {

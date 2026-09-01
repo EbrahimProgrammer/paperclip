@@ -21,6 +21,7 @@ import {
   createCapabilityRunnerdProviderEnvironment,
   defaultCapabilityRunnerdBinary,
   expandRunnerdCanonicalNotifications,
+  latestRunnerdSessionReadiness,
   rehydrateRunnerdItemNotification,
   rehydrateRunnerdPlanNotification,
   rehydrateRunnerdResultNotification,
@@ -493,6 +494,36 @@ it("resolves canonical and legacy durable session identities", () => {
     threadId: "legacy-thread-1",
     sessionId: "legacy-session-1",
   });
+});
+
+it("recovers provider readiness from an already-committed journal without replay", () => {
+  const persistedReady = {
+    provider: "codex",
+    providerSessionId: "provider-thread-persisted",
+    providerAccountSessionId: "provider-account-persisted",
+    processId: 4242,
+    runtimeIdentity: { executionKind: "local_process" },
+    providerDescriptor: {
+      driver: "codex_app_server",
+      providerVersion: "persisted-version",
+    },
+    providerIdentity: {
+      kind: "codex_thread",
+      threadId: "provider-thread-persisted",
+    },
+  };
+  expect(
+    latestRunnerdSessionReadiness([
+      {
+        eventType: "harness.ready",
+        envelope: { payload: { payload: persistedReady } },
+      },
+      {
+        eventType: "session.goal.snapshot",
+        envelope: { payload: { payload: { goal: { status: "paused" } } } },
+      },
+    ]),
+  ).toEqual(persistedReady);
 });
 
 const fakeCodex = resolve(
@@ -1345,8 +1376,12 @@ it("cold-restores a paused goal for a successor run without replacing its provid
         "utf8",
       ),
     ) as Record<string, unknown>;
+  const restoredEvidenceSnapshots: Array<ReturnType<typeof first.evidence>> = [];
   const restored = createCapabilityRunnerdCodexTransport({
     ...options,
+    onEvidence: (evidence) => {
+      restoredEvidenceSnapshots.push(structuredClone(evidence));
+    },
     runnerStateDirectory: externallyOwnedRunnerStateDirectory,
     readRunnerState,
     resumeDynamicTools: dynamicTools,
@@ -1372,6 +1407,12 @@ it("cold-restores a paused goal for a successor run without replacing its provid
     ).toEqual(baseIdentity);
     const read = await restored.transport.request("thread/read", {});
     expect(read.thread).toMatchObject({ id: "codex-thread-1" });
+    expect(restoredEvidenceSnapshots[0]).toMatchObject({
+      providerPid: null,
+      codexPid: null,
+      sidecarPid: null,
+      agentPid: null,
+    });
     await expect(
       restored.transport.request("thread/goal/get", {}),
     ).resolves.toMatchObject({

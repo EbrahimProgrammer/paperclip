@@ -13,6 +13,7 @@ import {
 } from "@paperclipai/shared";
 import {
   agents,
+  agentTaskSessions,
   agentWakeupRequests,
   approvals,
   activityLog,
@@ -3577,6 +3578,30 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       issueIds: [] as string[],
     };
 
+    const candidateIssueIds = candidates.map((issue) => issue.id);
+    const unfinishedGoalBindings = new Set<string>();
+    if (candidateIssueIds.length > 0) {
+      const pausedGoals = await db
+        .select({
+          companyId: agentTaskSessions.companyId,
+          agentId: agentTaskSessions.agentId,
+          taskKey: agentTaskSessions.taskKey,
+        })
+        .from(agentTaskSessions)
+        .where(
+          and(
+            inArray(agentTaskSessions.taskKey, candidateIssueIds),
+            sql`${agentTaskSessions.goalStatus} is not null`,
+            sql`${agentTaskSessions.goalStatus} <> 'complete'`,
+          ),
+        );
+      for (const goal of pausedGoals) {
+        unfinishedGoalBindings.add(
+          `${goal.companyId}:${goal.taskKey}:${goal.agentId}`,
+        );
+      }
+    }
+
     for (const issue of candidates) {
       const executionState = issue.status === "in_review"
         ? parseIssueExecutionState(issue.executionState)
@@ -3590,6 +3615,19 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         ? participantAgentId
         : issue.assigneeAgentId;
       if (!agentId) {
+        result.skipped += 1;
+        continue;
+      }
+
+      // An unfinished durable session goal owns its continuation lifecycle.
+      // A paused goal waits for explicit resume; an active goal is handled by
+      // dedicated goal recovery. Generic stranded-work recovery would race
+      // either authority and can replace the provider session owning the goal.
+      if (
+        unfinishedGoalBindings.has(
+          `${issue.companyId}:${issue.id}:${agentId}`,
+        )
+      ) {
         result.skipped += 1;
         continue;
       }

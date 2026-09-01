@@ -11036,13 +11036,16 @@ export function heartbeatService(
   async function handleRunLivenessContinuation(
     run: typeof heartbeatRuns.$inferSelect,
   ) {
-    if (readNonEmptyString(parseObject(run.contextSnapshot).goalControlRequestId))
+    const context = parseObject(run.contextSnapshot);
+    if (
+      readNonEmptyString(context.goalControlRequestId) ||
+      context.resumeSessionGoalHeartbeat === true
+    )
       return;
     const livenessState = run.livenessState as RunLivenessState | null;
     if (livenessState !== "plan_only" && livenessState !== "empty_response")
       return;
 
-    const context = parseObject(run.contextSnapshot);
     const issueId = readNonEmptyString(context.issueId);
     if (!issueId) return;
 
@@ -21723,7 +21726,9 @@ export function heartbeatService(
             suppressImmediateRecovery:
               readNonEmptyString(
                 parseObject(livenessRun.contextSnapshot).goalControlRequestId,
-              ) !== null,
+              ) !== null ||
+              parseObject(livenessRun.contextSnapshot)
+                .resumeSessionGoalHeartbeat === true,
           });
           await handleRunLivenessContinuation(livenessRun);
           await handleIssueReviewPathDisposition(livenessRun);
@@ -22236,7 +22241,9 @@ export function heartbeatService(
             suppressImmediateRecovery:
               readNonEmptyString(
                 parseObject(livenessRun.contextSnapshot).goalControlRequestId,
-              ) !== null,
+              ) !== null ||
+              parseObject(livenessRun.contextSnapshot)
+                .resumeSessionGoalHeartbeat === true,
           }).catch(
             (releaseError) => {
               logger.error(
