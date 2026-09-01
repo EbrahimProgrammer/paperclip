@@ -281,6 +281,57 @@ describeEmbeddedPostgres("runner goal service", () => {
     expect(duplicate).toBeNull();
   });
 
+  it("keeps a missing resumed goal blocked across restored empty snapshots", async () => {
+    const binding = await seed();
+    const eventBinding = { ...binding, adapterType: "paperclip_runner" };
+    await applyRunnerGoalPrpEvent(db, eventBinding, {
+      eventType: "session.goal.updated",
+      sourceSeq: 1,
+      payload: {
+        goal: {
+          objective: "Recover the durable provider goal",
+          status: "active",
+        },
+      },
+    });
+
+    const blocked = await applyRunnerGoalPrpEvent(db, eventBinding, {
+      eventType: "session.goal.snapshot",
+      sourceSeq: 2,
+      payload: { goal: null },
+    });
+    expect(blocked).toMatchObject({
+      revision: 2,
+      goal: {
+        objective: "Recover the durable provider goal",
+        status: "blocked",
+        lastReason: "provider_session_goal_missing_after_resume",
+      },
+    });
+
+    await expect(applyRunnerGoalPrpEvent(db, eventBinding, {
+      eventType: "session.goal.snapshot",
+      sourceSeq: 3,
+      payload: { goal: null },
+    })).resolves.toBeNull();
+    const [session] = await db.select({
+      revision: agentTaskSessions.goalRevision,
+      sourceCursor: agentTaskSessions.goalSourceCursor,
+      desiredState: agentTaskSessions.goalDesiredState,
+      goal: agentTaskSessions.goalJson,
+    }).from(agentTaskSessions);
+    expect(session).toMatchObject({
+      revision: 2,
+      sourceCursor: 3,
+      desiredState: "paused",
+      goal: {
+        objective: "Recover the durable provider goal",
+        status: "blocked",
+        lastReason: "provider_session_goal_missing_after_resume",
+      },
+    });
+  });
+
   it("projects committed capability and goal events exactly once across duplicate delivery", async () => {
     const binding = await seed();
     const eventBinding = {

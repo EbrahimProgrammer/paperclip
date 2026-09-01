@@ -709,20 +709,21 @@ export async function applyRunnerGoalPrpEvent(
         ? null
         : normalizedPrpGoal(payload.goal, workingNow);
     if (turnLifecycleEvent && goal) goal = { ...goal, workingNow };
-    if (
-      event.eventType === "session.goal.snapshot" &&
-      !goal &&
-      session.goalDesiredState === "active"
-    ) {
+    if (event.eventType === "session.goal.snapshot" && !goal) {
       const persistedGoal = storedGoal(session);
-      if (persistedGoal) {
+      const alreadyBlockedForMissingProviderGoal =
+        persistedGoal?.status === "blocked" &&
+        persistedGoal.lastReason === "provider_session_goal_missing_after_resume";
+      if (
+        persistedGoal &&
+        (session.goalDesiredState === "active" || alreadyBlockedForMissingProviderGoal)
+      ) {
         goal = {
           ...persistedGoal,
           status: "blocked",
           workingNow: false,
           lastReason: "provider_session_goal_missing_after_resume",
-          updatedAt: persistedGoal.status === "blocked" &&
-              persistedGoal.lastReason === "provider_session_goal_missing_after_resume"
+          updatedAt: alreadyBlockedForMissingProviderGoal
             ? persistedGoal.updatedAt
             : new Date().toISOString(),
         };
