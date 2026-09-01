@@ -327,13 +327,14 @@ export function IssueProperties({
   }, [hasPlanTab]);
   useEffect(() => {
     if (!documentDeepLink) return;
-    if (documentDeepLink.tab === "document") return;
+    const targetTab = documentDeepLink.tab;
+    if (targetTab === "document") return;
     paneTabUserChosenRef.current = true;
-    setPaneTab(documentDeepLink.tab);
+    setPaneTab(targetTab);
     setClosedPaneTabs((current) => {
-      if (!current.has(documentDeepLink.tab)) return current;
+      if (!current.has(targetTab)) return current;
       const next = new Set(current);
-      next.delete(documentDeepLink.tab);
+      next.delete(targetTab);
       return next;
     });
   }, [documentDeepLink]);

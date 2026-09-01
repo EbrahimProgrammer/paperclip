@@ -1774,6 +1774,7 @@ describe("IssueProperties", () => {
       onUpdate: vi.fn(),
     });
     await flush();
+    await flush();
 
     const branchCopyButton = container.querySelector<HTMLButtonElement>(
       'button[aria-label="Copy pap-1-workspace to clipboard"]',
