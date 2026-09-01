@@ -330,6 +330,47 @@ fn codex_goal_autostart_binds_the_provider_turn_authority() {
 }
 
 #[test]
+fn codex_objective_only_paused_goal_edit_does_not_arm_turn_reconciliation() {
+    let directory = temporary_directory("goal-paused-edit");
+    let config = provider_config(&directory, &["--goal-autostart"]);
+    let mut provider = CodexProvider::start(&config, None).expect("start fake Codex provider");
+
+    provider
+        .set_goal(Some("Initial objective."), Some("paused"), None)
+        .expect("create paused provider goal");
+    let result = provider
+        .set_goal(Some("Edited while paused."), None, None)
+        .expect("edit paused provider goal");
+
+    assert_eq!(result.pointer("/goal/status"), Some(&json!("paused")));
+    provider
+        .start_turn("A normal turn remains safe.", &config.cwd)
+        .expect("start normal provider turn after paused edit");
+
+    provider.shutdown().expect("stop provider");
+    fs::remove_dir_all(directory).expect("remove Codex integration-test directory");
+}
+
+#[test]
+fn rejected_codex_goal_activation_restores_turn_reconciliation() {
+    let directory = temporary_directory("goal-set-rejected");
+    let config = provider_config(&directory, &["--reject-goal-set"]);
+    let mut provider = CodexProvider::start(&config, None).expect("start fake Codex provider");
+
+    let error = provider
+        .set_goal(Some("Rejected objective."), Some("active"), None)
+        .expect_err("reject provider goal activation");
+
+    assert!(error.to_string().contains("goal set rejected"));
+    provider
+        .start_turn("A normal turn remains safe.", &config.cwd)
+        .expect("start normal provider turn after rejected goal");
+
+    provider.shutdown().expect("stop provider");
+    fs::remove_dir_all(directory).expect("remove Codex integration-test directory");
+}
+
+#[test]
 fn codex_dynamic_tool_round_trips_through_the_provider_boundary() {
     let directory = temporary_directory("dynamic-tool");
     let config = provider_config(&directory, &["--require-dynamic-tool", "--emit-tool-call"]);

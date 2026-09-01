@@ -584,6 +584,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .any(|value| value == "--notification-before-response");
     let goal_policy_disabled = args.iter().any(|value| value == "--goal-policy-disabled");
     let goal_autostart = args.iter().any(|value| value == "--goal-autostart");
+    let reject_goal_set = args.iter().any(|value| value == "--reject-goal-set");
     let agent_created_goal = args
         .iter()
         .any(|value| value == "--agent-created-goal-on-open");
@@ -793,6 +794,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 "result": {"goal": state.goal}
             }))?,
             "thread/goal/set" => {
+                if reject_goal_set {
+                    send(json!({
+                        "id": id,
+                        "error": {"code": -32000, "message": "goal set rejected"}
+                    }))?;
+                    continue;
+                }
                 let params = message.get("params").cloned().unwrap_or_else(|| json!({}));
                 let previous = state.goal.clone().unwrap_or_else(|| json!({}));
                 let objective = params

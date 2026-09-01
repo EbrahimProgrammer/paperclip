@@ -838,7 +838,29 @@ impl CodexProvider {
             params.insert("tokenBudget".to_owned(), json!(token_budget));
         }
         match self.request_classified("thread/goal/set", Value::Object(params.clone())) {
-            Ok(result) => Ok(result),
+            Ok(result) => {
+                let effective_status = result
+                    .pointer("/goal/status")
+                    .or_else(|| result.get("status"))
+                    .and_then(Value::as_str);
+                if starts_idle_turn && effective_status.is_some_and(|value| value != "active") {
+                    // Objective-only updates preserve the provider's current
+                    // goal status. If that status is paused or otherwise
+                    // inactive, no autonomous turn starts. Restore the prior
+                    // reconciliation state unless the response raced with
+                    // contradictory provider-work evidence.
+                    let no_turn_evidence = self
+                        .pending_messages
+                        .iter()
+                        .skip(prior_buffered_message_count)
+                        .all(|buffered| is_non_active_goal_set_diagnostic(&buffered.value));
+                    if no_turn_evidence {
+                        self.ambiguous_turn_start_pending = false;
+                        self.completion_reconciliation_pending = prior_reconciliation_pending;
+                    }
+                }
+                Ok(result)
+            }
             Err(ProviderRequestError::Rejected(error)) => {
                 if starts_idle_turn {
                     let definite_rejection = self
@@ -2003,6 +2025,34 @@ fn is_unbound_rejected_turn_diagnostic(message: &Value) -> bool {
         && message
             .get("params")
             .is_none_or(|params| !contains_provider_work_binding(params))
+}
+
+fn is_non_active_goal_set_diagnostic(message: &Value) -> bool {
+    if message.get("id").is_some() {
+        return false;
+    }
+    match message.get("method").and_then(Value::as_str) {
+        Some("thread/goal/updated") => message
+            .get("params")
+            .is_none_or(|params| !contains_provider_turn_binding(params)),
+        Some("warning") => message
+            .get("params")
+            .is_none_or(|params| !contains_provider_work_binding(params)),
+        _ => false,
+    }
+}
+
+fn contains_provider_turn_binding(value: &Value) -> bool {
+    match value {
+        Value::Array(values) => values.iter().any(contains_provider_turn_binding),
+        Value::Object(fields) => fields.iter().any(|(key, child)| {
+            (matches!(key.as_str(), "turnId" | "itemId" | "requestId") && !child.is_null())
+                || (matches!(key.as_str(), "turn" | "item" | "request")
+                    && child.get("id").is_some_and(|id| !id.is_null()))
+                || contains_provider_turn_binding(child)
+        }),
+        _ => false,
+    }
 }
 
 fn contains_provider_work_binding(value: &Value) -> bool {
