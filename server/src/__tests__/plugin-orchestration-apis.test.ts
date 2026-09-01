@@ -29,6 +29,7 @@ import {
   instanceUserRoles,
   pluginManagedResources,
   plugins,
+  principalPermissionGrants,
   projects,
 } from "@paperclipai/db";
 import {
@@ -132,6 +133,7 @@ describeEmbeddedPostgres("plugin orchestration APIs", () => {
     await db.delete(pluginManagedResources);
     await db.delete(projects);
     await db.delete(plugins);
+    await db.delete(principalPermissionGrants);
     await db.delete(companyMemberships);
     await db.delete(instanceUserRoles);
     await db.delete(agents);
@@ -1000,6 +1002,7 @@ describeEmbeddedPostgres("plugin orchestration APIs", () => {
   async function seedGovernedSecretBinding(options: {
     conflictingConfig?: boolean;
     acceptedWithoutReceipt?: boolean;
+    grantAgentsConfigure?: boolean;
   } = {}) {
     const { companyId, agentId } = await seedCompanyAndAgent();
     const actorUserId = randomUUID();
@@ -1012,7 +1015,19 @@ describeEmbeddedPostgres("plugin orchestration APIs", () => {
       status: "active",
       membershipRole: "owner",
     });
+    // Keep a stale instance-admin row in every fixture. Gateway attribution
+    // must never use it as authority; successful fixtures receive the explicit
+    // company-scoped grant that the governed effect requires.
     await db.insert(instanceUserRoles).values({ userId: actorUserId, role: "instance_admin" });
+    if (options.grantAgentsConfigure !== false) {
+      await db.insert(principalPermissionGrants).values({
+        companyId,
+        principalType: "user",
+        principalId: actorUserId,
+        permissionKey: "agents:configure",
+        grantedByUserId: actorUserId,
+      });
+    }
     await db.update(agents).set({
       runtimeConfig: { heartbeat: { maxConcurrentRuns: 1 } },
       ...(options.conflictingConfig
@@ -1217,6 +1232,67 @@ describeEmbeddedPostgres("plugin orchestration APIs", () => {
         executionStatus: "executed",
       },
     });
+  });
+
+  it("respondInteraction ignores a stale instance-admin row and allows an authorized replay", async () => {
+    const fixture = await seedGovernedSecretBinding({ grantAgentsConfigure: false });
+    const services = buildHostServices(
+      db,
+      "plugin-record-id",
+      "paperclip.gateway",
+      createEventBusStub(),
+      undefined,
+      { heartbeatRuntimeEnv: {} },
+    );
+
+    await expect(services.issues.respondInteraction({
+      issueId: fixture.issueId,
+      interactionId: fixture.interactionId,
+      companyId: fixture.companyId,
+      action: "accept",
+      actorUserId: fixture.actorUserId,
+    })).rejects.toThrow("Missing permission: agents:configure");
+
+    const [acceptedWithoutReceipt] = await db
+      .select()
+      .from(issueThreadInteractions)
+      .where(eq(issueThreadInteractions.id, fixture.interactionId));
+    expect(acceptedWithoutReceipt).toMatchObject({
+      status: "accepted",
+      result: { version: 1, outcome: "accepted" },
+    });
+    expect((acceptedWithoutReceipt?.result as { secretProposal?: unknown } | null)?.secretProposal)
+      .toBeUndefined();
+    expect(await db.select().from(companySecrets)).toHaveLength(0);
+    expect(await db.select().from(companySecretBindings)).toHaveLength(0);
+    expect(await db.select().from(companySecretProposals)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: fixture.secretProposalId, status: "pending" }),
+      expect.objectContaining({ id: fixture.bindingProposalId, status: "pending" }),
+    ]));
+    const [unchangedAgent] = await db.select().from(agents).where(eq(agents.id, fixture.agentId));
+    expect(unchangedAgent?.adapterConfig).toEqual({ command: "true" });
+
+    await db.insert(principalPermissionGrants).values({
+      companyId: fixture.companyId,
+      principalType: "user",
+      principalId: fixture.actorUserId,
+      permissionKey: "agents:configure",
+      grantedByUserId: fixture.actorUserId,
+    });
+    const repaired = await services.issues.respondInteraction({
+      issueId: fixture.issueId,
+      interactionId: fixture.interactionId,
+      companyId: fixture.companyId,
+      action: "accept",
+      actorUserId: fixture.actorUserId,
+    });
+
+    expect(repaired).toMatchObject({
+      applied: false,
+      interaction: { result: { secretProposal: { status: "executed" } } },
+    });
+    expect(await db.select().from(companySecrets)).toHaveLength(1);
+    expect(await db.select().from(companySecretBindings)).toHaveLength(1);
   });
 
   it("respondInteraction records a terminal failure when the secret binding cannot be applied", async () => {

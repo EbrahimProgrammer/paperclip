@@ -107,6 +107,12 @@ function executionErrorCode(error: unknown) {
   return "secret_proposal_execution_failed";
 }
 
+function isAuthorizationDenial(error: unknown) {
+  if (!(error instanceof HttpError) || error.status !== 403) return false;
+  const reason = readNonEmptyString(asRecord(error.details).reason);
+  return reason?.startsWith("deny_") ?? false;
+}
+
 /**
  * Executes the governed effect behind an accepted secret-binding card.
  *
@@ -206,6 +212,12 @@ export async function executeAcceptedSecretProposalInteraction(input: {
     }
     return { interaction, disposition: "executed" };
   } catch (error) {
+    // An unauthorized resolver must not be able to poison a card that an
+    // authorized human already accepted. Approval authorization runs before
+    // the transaction mutates the proposal, so preserve the missing receipt
+    // and let a properly granted human reconcile it later.
+    if (isAuthorizationDenial(error)) throw error;
+
     const errorCode = executionErrorCode(error);
     const interaction = await input.interactions.recordSecretProposalExecutionResult(
       input.issue,
@@ -215,6 +227,9 @@ export async function executeAcceptedSecretProposalInteraction(input: {
     );
     const recordedReceipt = asRecord(asRecord(interaction.result).secretProposal);
     if (recordedReceipt.status !== "executed") {
+      // Only the binding proposal becomes terminal here. Its source-secret
+      // proposal intentionally remains pending so a corrected binding proposal
+      // can reuse it without asking for the secret value again.
       try {
         await input.issues.addComment(
           input.issue.id,

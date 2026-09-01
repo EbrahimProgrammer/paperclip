@@ -7,7 +7,6 @@ import {
   companyMemberships,
   costEvents,
   heartbeatRuns,
-  instanceUserRoles,
   invites,
   issues as issuesTable,
   pluginLogs,
@@ -913,18 +912,7 @@ export function buildHostServices(
     if (!allowViewer && membership.membershipRole === "viewer") {
       throw new Error(`actorUserId "${userId}" has viewer (read-only) access and cannot take this write action`);
     }
-    const isInstanceAdmin = Boolean(
-      await db
-        .select({ id: instanceUserRoles.id })
-        .from(instanceUserRoles)
-        .where(and(
-          eq(instanceUserRoles.userId, userId),
-          eq(instanceUserRoles.role, "instance_admin"),
-        ))
-        .limit(1)
-        .then((rows) => rows[0] ?? null),
-    );
-    return { ...membership, isInstanceAdmin };
+    return membership;
   };
 
   /**
@@ -2536,7 +2524,11 @@ export function buildHostServices(
             membershipRole: membership.membershipRole,
             status: "active",
           }],
-          isInstanceAdmin: membership.isInstanceAdmin,
+          // Gateway pairing proves active company membership, not instance
+          // administration. Ignore persisted instance-admin rows so a stale
+          // role cannot bypass the normal agents:configure grant check.
+          isInstanceAdmin: false,
+          ignoreInstanceAdmin: true,
           source: "session",
         };
 
