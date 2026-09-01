@@ -1321,6 +1321,7 @@ it("cold-restores a paused goal for a successor run without replacing its provid
     stateDirectory,
     lifecyclePolicy: { mode: "per_turn" as const, idleTimeoutMs: null },
     runtimeContext: assignedRuntimeContext(skillRoot, instructionRoot),
+    resumeWorkingDirectory: stateDirectory,
   };
   const dynamicTools = [
     {
@@ -1343,7 +1344,7 @@ it("cold-restores a paused goal for a successor run without replacing its provid
   }));
   try {
     await first.transport.request("thread/start", {
-      cwd: tmpdir(),
+      cwd: stateDirectory,
       dynamicTools,
     });
     expect((await stat(join(stateDirectory, "codex-home", "skills", "assigned"))).mode & 0o222).toBe(0);
@@ -1406,7 +1407,40 @@ it("cold-restores a paused goal for a successor run without replacing its provid
       ).identity,
     ).toEqual(baseIdentity);
     const read = await restored.transport.request("thread/read", {});
-    expect(read.thread).toMatchObject({ id: "codex-thread-1" });
+    expect(read.thread).toMatchObject({
+      id: "codex-thread-1",
+      cwd: stateDirectory,
+    });
+    expect(
+      JSON.parse(
+        await readFile(
+          join(stateDirectory, "control-plane", "control-plane-state.json"),
+          "utf8",
+        ),
+      ).identity,
+    ).toEqual({
+      ...baseIdentity,
+      runId: "run-cold-successor",
+      turnId: "turn-cold-successor",
+      itemId: "item-cold-successor",
+    });
+    expect(
+      JSON.parse(
+        await readFile(
+          join(externallyOwnedRunnerStateDirectory, "runner-state.json"),
+          "utf8",
+        ),
+      ).runId,
+    ).toBe("run-cold-successor");
+    await expect(
+      stat(
+        join(
+          externallyOwnedRunnerStateDirectory,
+          "run-history",
+          "runner-state-run-cold-first-to-run-cold-successor.json",
+        ),
+      ),
+    ).resolves.toBeTruthy();
     expect(restoredEvidenceSnapshots[0]).toMatchObject({
       providerPid: null,
       codexPid: null,

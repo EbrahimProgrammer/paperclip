@@ -751,6 +751,100 @@ impl DurableStateStore {
         &self.path
     }
 
+    /// Starts a fresh per-run journal while retaining provider-owned state in
+    /// the surrounding directory. The caller must present the exact prior run
+    /// id and the same durable session/runner/lease binding; this is used only
+    /// after the prior Paperclip heartbeat has settled.
+    pub fn rotate_run_binding(
+        &self,
+        config: &DurableRunnerConfig,
+        previous_run_id: &str,
+    ) -> Result<bool, DurableRunnerError> {
+        config.validate()?;
+        if previous_run_id == config.run_id {
+            return Err(DurableRunnerError::invalid(
+                "durable run rotation requires a distinct prior run id",
+            ));
+        }
+        let parent = self.path.parent().ok_or_else(|| {
+            DurableRunnerError::invalid("durable state path omitted its parent directory")
+        })?;
+        let history = parent.join("run-history");
+        let archive = history.join(format!(
+            "runner-state-{previous_run_id}-to-{}.json",
+            config.run_id
+        ));
+        let mut bytes = Vec::new();
+        match open_private_regular_file(&self.path) {
+            Ok(mut file) => {
+                file.read_to_end(&mut bytes).map_err(|error| {
+                    DurableRunnerError::invalid(format!(
+                        "failed to read durable state before run rotation: {error}"
+                    ))
+                })?;
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound && archive.exists() => {
+                return Ok(true);
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Err(DurableRunnerError::invalid(
+                    "durable run rotation omitted the prior journal",
+                ));
+            }
+            Err(error) => {
+                return Err(DurableRunnerError::invalid(format!(
+                    "failed to open durable state before run rotation: {error}"
+                )));
+            }
+        }
+        let state: DurableState = serde_json::from_slice(&bytes).map_err(|error| {
+            DurableRunnerError::invalid(format!(
+                "durable state is malformed and cannot be rotated: {error}"
+            ))
+        })?;
+        if state.run_id == config.run_id {
+            validate_binding(&state, config, state.has_legacy_command_journal())?;
+            return Ok(false);
+        }
+        if state.run_id != previous_run_id
+            || state.runner_instance_id != config.runner_instance_id
+            || state.environment_lease_id != config.environment_lease_id
+            || state.normalized_session_id != config.normalized_session_id
+        {
+            return Err(DurableRunnerError::invalid(
+                "durable run rotation does not match the prior session binding",
+            ));
+        }
+        fs::create_dir_all(&history).map_err(|error| {
+            DurableRunnerError::invalid(format!("failed to create durable run history: {error}"))
+        })?;
+        #[cfg(unix)]
+        fs::set_permissions(&history, fs::Permissions::from_mode(0o700)).map_err(|error| {
+            DurableRunnerError::invalid(format!("failed to protect durable run history: {error}"))
+        })?;
+        if archive.exists() {
+            return Err(DurableRunnerError::invalid(
+                "durable run rotation archive already exists while the prior journal is live",
+            ));
+        }
+        fs::rename(&self.path, &archive).map_err(|error| {
+            DurableRunnerError::invalid(format!(
+                "failed to archive the prior durable run journal: {error}"
+            ))
+        })?;
+        #[cfg(unix)]
+        {
+            File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|error| {
+                    DurableRunnerError::invalid(format!(
+                        "failed to sync durable run rotation: {error}"
+                    ))
+                })?;
+        }
+        Ok(true)
+    }
+
     pub fn load_or_create(
         &self,
         config: &DurableRunnerConfig,
@@ -1371,6 +1465,35 @@ mod tests {
         let mut wrong = config.clone();
         wrong.run_id = "run_2".to_owned();
         assert!(store.load_or_create(&wrong).is_err());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn explicit_run_rotation_archives_the_prior_journal_and_starts_fresh() {
+        let directory = temporary_directory("run-rotation");
+        let _ = fs::remove_dir_all(&directory);
+        let original = config(directory.clone());
+        let store = DurableStateStore::new(&directory).unwrap();
+        let (mut state, _) = store.load_or_create(&original).unwrap();
+        state
+            .enqueue_event(&original, "run.terminal", EventPriority::P0, json!({}))
+            .unwrap();
+        store.save(&state).unwrap();
+
+        let mut successor = original.clone();
+        successor.run_id = "run_2".to_owned();
+        successor.turn_id = "turn_2".to_owned();
+        successor.item_id = "item_2".to_owned();
+        successor.connect_url = "ws://127.0.0.1:3000/api/runner/v1/connect/run_2".to_owned();
+        assert!(store.rotate_run_binding(&successor, "run_1").unwrap());
+        let (rotated, recovered) = store.load_or_create(&successor).unwrap();
+        assert!(!recovered);
+        assert_eq!(rotated.run_id, "run_2");
+        assert!(rotated.outbox.is_empty());
+        assert!(directory
+            .join("run-history/runner-state-run_1-to-run_2.json")
+            .exists());
+        assert!(!store.rotate_run_binding(&successor, "run_1").unwrap());
         fs::remove_dir_all(directory).unwrap();
     }
 

@@ -1974,6 +1974,8 @@ export function spawnRunner(options: {
   runnerBinaryPath?: string;
   runnerVersion: string;
   runnerDigest: string;
+  /** Rotate a completed durable run journal while preserving provider state. */
+  rotateFromRunId?: string;
   environment?: NodeJS.ProcessEnv;
   processLauncher?: (spec: RunnerProcessLaunchSpec) => RunnerProcessHandle;
 }): RunnerProcessHandle {
@@ -2017,6 +2019,9 @@ export function spawnRunner(options: {
     options.runnerVersion,
     "--runner-digest",
     options.runnerDigest,
+    ...(options.rotateFromRunId === undefined
+      ? []
+      : ["--rotate-from-run-id", options.rotateFromRunId]),
     "--fake-harness",
     fakeHarnessBinary,
     "--fake-harness-script",

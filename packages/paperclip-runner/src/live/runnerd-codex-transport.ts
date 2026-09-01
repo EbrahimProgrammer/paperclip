@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -97,6 +98,75 @@ function recoveredControlPlaneIdentity(
     );
   }
   return structuredClone(identity);
+}
+
+function rotateControlPlaneRunJournal(input: {
+  directory: string;
+  previousIdentity: DurableRecoveryIdentity;
+  desiredIdentity: DurableRecoveryIdentity;
+  expectedRunnerVersion: string;
+  expectedRunnerDigest: string;
+}): void {
+  const statePath = resolve(input.directory, "control-plane-state.json");
+  const previousBytes = readFileSync(statePath);
+  const previousState = record(JSON.parse(previousBytes.toString("utf8")));
+  const previousCommands = Array.isArray(previousState.commands)
+    ? previousState.commands.map(record)
+    : [];
+  const prepare = [...previousCommands]
+    .reverse()
+    .find((command) => command.type === "run.prepare");
+  if (!prepare) {
+    throw new Error("durable successor run omitted its prior prepare command");
+  }
+  const stagingDirectory = mkdtempSync(
+    resolve(input.directory, "..", "control-plane-rotation-"),
+  );
+  try {
+    const staged = new DurablePrpControlPlane({
+      stateDirectory: stagingDirectory,
+      identity: input.desiredIdentity,
+      expectedRunnerVersion: input.expectedRunnerVersion,
+      expectedRunnerDigest: input.expectedRunnerDigest,
+      connectionLeaseTtlMs: 60 * 60 * 1_000,
+    });
+    staged.queueCommand(
+      "run.prepare",
+      structuredClone(record(prepare.payload)),
+      `prepare_${input.desiredIdentity.runId}`,
+      true,
+    );
+    staged.queueCommand(
+      "session.open",
+      { reuse: "same_session" },
+      `open_${input.desiredIdentity.runId}`,
+      true,
+    );
+    const stagedBytes = readFileSync(
+      resolve(stagingDirectory, "control-plane-state.json"),
+    );
+    const historyDirectory = resolve(input.directory, "run-history");
+    mkdirSync(historyDirectory, { recursive: true, mode: 0o700 });
+    const archivePath = resolve(
+      historyDirectory,
+      `control-plane-state-${input.previousIdentity.runId}-to-${input.desiredIdentity.runId}.json`,
+    );
+    if (existsSync(archivePath)) {
+      if (!readFileSync(archivePath).equals(previousBytes)) {
+        throw new Error("durable successor run history conflicts with the live journal");
+      }
+    } else {
+      writeFileSync(archivePath, previousBytes, { flag: "wx", mode: 0o600 });
+    }
+    const replacementPath = resolve(
+      input.directory,
+      `.control-plane-state-${randomUUID()}.tmp`,
+    );
+    writeFileSync(replacementPath, stagedBytes, { flag: "wx", mode: 0o600 });
+    renameSync(replacementPath, statePath);
+  } finally {
+    rmSync(stagingDirectory, { recursive: true, force: true });
+  }
 }
 
 function bridgedCodexQuestionParams(
@@ -267,6 +337,8 @@ export interface CapabilityRunnerdCodexTransportOptions {
   runnerRuntimeContext?: NativeRuntimeContextSnapshot | null;
   /** Root path visible to runnerd when it is not on the Paperclip host. */
   runnerFilesystemRoot?: string;
+  /** Workspace cwd to retain when a local provider session is reopened. */
+  resumeWorkingDirectory?: string;
   /** Current run's authority catalog, used when a suspended session is rebound. */
   resumeDynamicTools?: readonly Readonly<Record<string, unknown>>[];
   /** Provider turn recorded by the owner checkpoint when restoring an active run. */
@@ -1261,7 +1333,10 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
           ...(this.#providerIdentity === null
             ? {}
             : { providerIdentity: structuredClone(this.#providerIdentity) }),
-          cwd: this.options.runnerFilesystemRoot ?? tmpdir(),
+          cwd:
+            this.options.runnerFilesystemRoot ??
+            this.options.resumeWorkingDirectory ??
+            tmpdir(),
           turns: recoveredTurns,
         },
       };
@@ -1786,19 +1861,37 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
       throw new Error("PRP provider resume state is unavailable");
     }
     const controlPlaneDirectory = resolve(this.#root, "control-plane");
-    const identity = recoveredControlPlaneIdentity(
+    const previousIdentity = recoveredControlPlaneIdentity(
       controlPlaneDirectory,
       desiredIdentity,
     );
-    // The durable runner journal remains under its immutable original run
-    // identity. A successor Paperclip heartbeat wraps rehydrated provider
-    // notifications in its own outer PRP authority, so cold recovery must use
-    // the stored inner identity rather than replacing the provider session.
-    // recoveredControlPlaneIdentity already proves the stable runner, lease,
-    // and normalized-session binding before this boundary is crossed.
+    const runnerStateBeforeResume = await this.#readDurableRunnerState();
+    const previousRunnerRunId = runnerStateBeforeResume.runId;
+    if (typeof previousRunnerRunId !== "string" || previousRunnerRunId.length === 0) {
+      throw new Error("PRP provider resume state omitted its durable run identity");
+    }
     const runnerBinaryPath =
       this.options.runnerBinary ?? defaultCapabilityRunnerdBinary();
     const runnerArtifact = approvedRunnerArtifact(runnerBinaryPath);
+    const rotatesControlPlaneBinding =
+      previousIdentity.runId !== desiredIdentity.runId ||
+      previousIdentity.turnId !== desiredIdentity.turnId ||
+      previousIdentity.itemId !== desiredIdentity.itemId;
+    const rotatesRunnerBinding = previousRunnerRunId !== desiredIdentity.runId;
+    if (rotatesControlPlaneBinding) {
+      // PRP terminality is per heartbeat run. Preserve the provider-owned
+      // checkpoint, but start a fresh command/event journal so the successor
+      // cannot replay the prior run's terminal boundary or emit under stale
+      // authority. Both journals are archived before the atomic replacement.
+      rotateControlPlaneRunJournal({
+        directory: controlPlaneDirectory,
+        previousIdentity,
+        desiredIdentity,
+        expectedRunnerVersion: runnerArtifact.version,
+        expectedRunnerDigest: runnerArtifact.digest,
+      });
+    }
+    const identity = rotatesControlPlaneBinding ? desiredIdentity : previousIdentity;
     this.#durableTurnId = identity.turnId;
     const provider = this.options.provider ?? "codex";
     const sourceRuntimeContext = this.options.runtimeContext ?? null;
@@ -1866,9 +1959,9 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
       connectionLeaseTtlMs: 60 * 60 * 1_000,
     });
     this.#core = core;
-    const persistedReadiness = latestRunnerdSessionReadiness(
-      core.store.state.committedEvents,
-    );
+    const persistedReadiness = rotatesControlPlaneBinding
+      ? null
+      : latestRunnerdSessionReadiness(core.store.state.committedEvents);
     if (persistedReadiness !== null) {
       // Fully acknowledged durable journals do not necessarily emit another
       // ready event when runnerd reconnects. Adopt the last committed provider
@@ -1898,6 +1991,9 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
       maxRuntimeMs: 60 * 60 * 1_000,
       reconnectGraceMs: this.options.runnerReconnectGraceMs,
       lifecyclePolicy: this.options.lifecyclePolicy,
+      ...(rotatesRunnerBinding
+        ? { rotateFromRunId: previousRunnerRunId }
+        : {}),
       runnerBinaryPath,
       runnerVersion: runnerArtifact.version,
       runnerDigest: runnerArtifact.digest,
@@ -1932,6 +2028,10 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
     this.#evidence.runnerProcessGroupId = null;
     this.#publish();
     this.#pump = setInterval(() => this.#pumpEventsSafely(), 5);
+    if (rotatesControlPlaneBinding) {
+      await this.#waitCommand("run.prepare");
+      await this.#waitCommand("session.open");
+    }
     await this.#waitForProviderIdentity();
     this.#startupComplete = true;
     this.#diagnostic(

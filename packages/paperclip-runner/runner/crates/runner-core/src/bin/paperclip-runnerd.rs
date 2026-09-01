@@ -39,6 +39,16 @@ fn value(args: &[String], name: &str) -> Result<String, LocalRunnerError> {
         .ok_or_else(|| LocalRunnerError::invalid(format!("missing value for {name}")))
 }
 
+fn optional_value(args: &[String], name: &str) -> Result<Option<String>, LocalRunnerError> {
+    let Some(index) = args.iter().position(|argument| argument == name) else {
+        return Ok(None);
+    };
+    args.get(index + 1)
+        .cloned()
+        .map(Some)
+        .ok_or_else(|| LocalRunnerError::invalid(format!("missing value for {name}")))
+}
+
 fn optional_u64(args: &[String], name: &str) -> Result<Option<u64>, LocalRunnerError> {
     let Some(index) = args.iter().position(|argument| argument == name) else {
         return Ok(None);
@@ -129,6 +139,12 @@ fn run_durable(args: &[String]) -> Result<(), LocalRunnerError> {
         reconnect_grace: optional_u64(args, "--reconnect-grace-ms")?.map(Duration::from_millis),
         max_runtime: duration("--max-runtime-ms", 60 * 60 * 1000)?,
     };
+    if let Some(previous_run_id) = optional_value(args, "--rotate-from-run-id")? {
+        paperclip_runner_core::durable::DurableStateStore::new(&state_dir)
+            .map_err(|error| LocalRunnerError::invalid(error.to_string()))?
+            .rotate_run_binding(&config, &previous_run_id)
+            .map_err(|error| LocalRunnerError::invalid(error.to_string()))?;
+    }
     let executor = CodexCommandExecutor::with_runner_config(state_dir, &config);
     run_durable_runner(config, ticket, executor)
         .map_err(|error| LocalRunnerError::invalid(error.to_string()))

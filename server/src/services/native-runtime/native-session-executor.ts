@@ -6173,6 +6173,7 @@ export async function createRunnerdBackend(input: {
             : null,
         runnerRuntimeContext: remoteRuntimeContext,
         runnerFilesystemRoot: remoteRunnerFilesystemRoot ?? undefined,
+        resumeWorkingDirectory: runnerExecution.workspace.cwd,
         opencodeRuntimeDirectory: remoteRunnerFilesystemRoot
           ? posix.join(remoteRunnerFilesystemRoot, "opencode")
           : undefined,
