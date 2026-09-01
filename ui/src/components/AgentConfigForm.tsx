@@ -79,7 +79,10 @@ import { resolveForcedKubernetesEnvironment } from "../lib/forced-kubernetes-env
 // Canonical type lives in @paperclipai/adapter-utils; re-exported here
 // so existing imports from this file keep working.
 export type { CreateConfigValues } from "@paperclipai/adapter-utils";
-import type { CreateConfigValues } from "@paperclipai/adapter-utils";
+import {
+  PAPERCLIP_RUNNER_PERMISSION_CAPABILITIES,
+  type CreateConfigValues,
+} from "@paperclipai/adapter-utils";
 import { Badge } from "@/components/ui/badge";
 
 /* ---- Props ---- */
@@ -1404,6 +1407,13 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                               dangerouslyBypassApprovalsAndSandbox:
                                 DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX,
                             }
+                          : t === "paperclip_runner"
+                            ? {
+                                provider: "codex",
+                                codexPermissionMode:
+                                  PAPERCLIP_RUNNER_PERMISSION_CAPABILITIES.codex.defaultMode,
+                                lifecycleMode: "per_turn",
+                              }
                           : {}),
                       },
                     }));
