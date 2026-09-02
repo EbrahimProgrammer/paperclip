@@ -127,6 +127,17 @@ describe("codex auth cache store", () => {
       );
     });
 
+    it("resolveCodexAuthCacheEntryPath rejects an identifier that toAccountHandle rejects", async () => {
+      const home = await makeInstanceRoot();
+      const env = envFor(home);
+      // A space, a plus sign, and a leading hyphen all fail the stricter
+      // account-handle allowlist, even though the older denylist alone would
+      // accept some of them.
+      expect(() => resolveCodexAuthCacheEntryPath(env, "acct 42", "company-a")).toThrow();
+      expect(() => resolveCodexAuthCacheEntryPath(env, "acct+42", "company-a")).toThrow();
+      expect(() => resolveCodexAuthCacheEntryPath(env, "-rf", "company-a")).toThrow();
+    });
+
     it("resolveCodexAuthCacheEntryPath verifies the resolved path stays under the cache root", async () => {
       const home = await makeInstanceRoot();
       const env = envFor(home);

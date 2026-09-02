@@ -40,6 +40,7 @@ export {
   type CredentialReadinessResult,
   type PromoteDeviceLoginCredentialInput,
   type PromoteDeviceLoginCredentialOutcome,
+  type PromoteDeviceLoginCredentialResult,
 } from "./adapter-auth-promotion.js";
 export { parseCodexJsonl, isCodexHarnessCrash, isCodexProviderQuotaError, isCodexTransientUpstreamError, isCodexUnknownSessionError } from "./parse.js";
 export {

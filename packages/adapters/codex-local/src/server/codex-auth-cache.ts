@@ -3,15 +3,19 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { resolvePaperclipInstanceRootForAdapter } from "@paperclipai/adapter-utils/server-utils";
 import { withDirectoryMergeLock } from "@paperclipai/adapter-utils/workspace-restore-merge";
+import { toAccountHandle } from "@paperclipai/shared";
 import { USE_SOURCE_EXIT, decideCodexAuthMerge } from "./codex-auth-merge-decision.js";
 import { writeCredentialSeedOrNewer } from "./codex-auth-seed-write.js";
 
-// The identity-keyed host credential cache keeps one usable subscription
-// credential per identity (`account_id`) in a SEPARATE host store, outside the
-// shared Codex home and outside the symlink allowlist. The cache is additive: it
+// The identity-keyed host credential store keeps one usable subscription
+// credential per identity (`account_id`) in a SEPARATE host tree, outside the
+// shared Codex home and outside the symlink allowlist. Each identity's entry
+// directory doubles as that account's addressable home: the device-login
+// promotion writes the durable credential there, and a company secret names the
+// directory by path. The store also still backs the identity-anchored vend: it
 // never changes the copy-back path, the fail-closed decision predicate, or the
-// host default store overwrite. It only refreshes an identity the host already
-// holds. It never seeds an empty host store and never picks a credential at
+// host default store overwrite, it only refreshes an identity the host already
+// holds, it never seeds an empty host store, and it never picks a credential at
 // random.
 
 const CACHE_DIR_NAME = "codex-auth-cache";
@@ -110,18 +114,25 @@ export function resolveCodexAuthCacheDir(
 
 /**
  * Resolves the entry path for one identity: `<cacheRoot>/<safeAccountId>/auth.json`.
- * The `account_id` is sanitized by {@link toCacheKey}. After the join, this
- * verifies the resolved entry path stays under the cache root and ends at exactly
- * `<safeAccountId>/auth.json`. This function does no filesystem work; it is safe
- * for a read path (the vend and the clear). (Security condition 3.)
+ * The `account_id` is validated first by {@link toAccountHandle} (a strict
+ * allowlist), the entry point of this function, then sanitized again by
+ * {@link toCacheKey} (a denylist) as a second, independent layer. After the
+ * join, this verifies the resolved entry path stays under the cache root and
+ * ends at exactly `<safeAccountId>/auth.json`. This function does no filesystem
+ * work; it is safe for a read path (the vend and the clear). (Security
+ * condition 3.)
  */
 export function resolveCodexAuthCacheEntryPath(
   env: NodeJS.ProcessEnv = process.env,
   accountId: string,
   companyId: string,
 ): string {
+  const handle = toAccountHandle(accountId);
+  if (!handle) {
+    throw new Error("codex auth cache: account_id is not a valid account handle");
+  }
   const resolvedRoot = resolveCodexAuthCacheDir(env, companyId);
-  const safeKey = toCacheKey(accountId);
+  const safeKey = toCacheKey(handle);
   const entryDir = path.resolve(resolvedRoot, safeKey);
   const entryPath = path.resolve(entryDir, CACHE_ENTRY_FILE);
   const expectedEntryPath = path.join(resolvedRoot, safeKey, CACHE_ENTRY_FILE);
@@ -156,8 +167,9 @@ async function ensurePrivateDir(dir: string): Promise<void> {
 
 /**
  * Resolves the entry path and creates the cache root and the entry directory
- * private (mode 0700), each guarded by `lstat`. Use this on the write path
- * before the cache slot is written.
+ * private (mode 0700), each guarded by `lstat`. The `account_id` is validated
+ * at the entry point of this function through {@link resolveCodexAuthCacheEntryPath}.
+ * Use this on the write path before the entry is written.
  */
 export async function ensureCodexAuthCacheEntryDir(
   env: NodeJS.ProcessEnv = process.env,
