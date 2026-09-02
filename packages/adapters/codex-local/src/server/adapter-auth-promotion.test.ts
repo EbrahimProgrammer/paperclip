@@ -247,6 +247,47 @@ describe("device-login credential promotion", () => {
     );
   });
 
+  it("promotion reports accountHomeCreated true for a first login of an account", async () => {
+    const home = await makeInstanceRoot();
+    const env = envFor(home);
+    const result = await promoteDeviceLoginCredential({
+      authBytes: subscriptionAuth({ accountId: ACCOUNT, lastRefresh: NEWER }),
+      companyId: COMPANY_A,
+      userInitiated: true,
+      checkReadiness: ready,
+      isSoleActiveOwner: soleOwner,
+      env,
+      log: noopLog,
+    });
+    expect(result.outcome).toBe("promoted");
+    expect(result.accountHomeCreated).toBe(true);
+  });
+
+  it("promotion reports accountHomeCreated false for a repeat login of the same account", async () => {
+    const home = await makeInstanceRoot();
+    const env = envFor(home);
+    await promoteDeviceLoginCredential({
+      authBytes: subscriptionAuth({ accountId: ACCOUNT, lastRefresh: OLDER, marker: "first" }),
+      companyId: COMPANY_A,
+      userInitiated: true,
+      checkReadiness: ready,
+      isSoleActiveOwner: soleOwner,
+      env,
+      log: noopLog,
+    });
+    const result = await promoteDeviceLoginCredential({
+      authBytes: subscriptionAuth({ accountId: ACCOUNT, lastRefresh: NEWER, marker: "second" }),
+      companyId: COMPANY_A,
+      userInitiated: true,
+      checkReadiness: ready,
+      isSoleActiveOwner: soleOwner,
+      env,
+      log: noopLog,
+    });
+    expect(result.outcome).toBe("promoted");
+    expect(result.accountHomeCreated).toBe(false);
+  });
+
   it("promotion keeps the company default home when it holds another account", async () => {
     const home = await makeInstanceRoot();
     const env = envFor(home);

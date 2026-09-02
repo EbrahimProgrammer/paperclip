@@ -877,15 +877,16 @@ describe("adapter device-login routes", () => {
   });
 
   it("fails closed and removes the account home when secret creation fails", async () => {
-    // No secret names this account's home yet, so this login is the one that
-    // created it. A secret-creation failure must fail the login and remove the
-    // directory it just created, so the operation stays atomic.
+    // This login created the account home, so a secret-creation failure must
+    // fail the login and remove the directory it just created, so the
+    // operation stays atomic.
     const accountHomeDir = await mkdtemp(path.join(os.tmpdir(), "paperclip-codex-account-home-test-"));
     accountHomeTestDirs.push(accountHomeDir);
     mockDeviceLoginPromotion.mockResolvedValueOnce({
       outcome: "promoted",
       accountId: "acct-broken-secret",
       accountHomeDir,
+      accountHomeCreated: true,
     });
     mockSecretService.create.mockRejectedValueOnce(new Error("db unavailable"));
     const app = await createApp();
@@ -904,6 +905,77 @@ describe("adapter device-login routes", () => {
     });
 
     await expect(lstat(accountHomeDir)).rejects.toThrow();
+  });
+
+  it("a secret creation failure keeps an account home that already existed", async () => {
+    // The account home directory pre-dates this login (a user deleted the
+    // secret but kept the directory, or an earlier login already wrote it).
+    // A secret-creation failure must still fail the login, but it must never
+    // remove a directory this login did not create.
+    const accountHomeDir = await mkdtemp(path.join(os.tmpdir(), "paperclip-codex-account-home-test-"));
+    accountHomeTestDirs.push(accountHomeDir);
+    mockDeviceLoginPromotion.mockResolvedValueOnce({
+      outcome: "promoted",
+      accountId: "acct-existing-home",
+      accountHomeDir,
+      accountHomeCreated: false,
+    });
+    mockSecretService.create.mockRejectedValueOnce(new Error("db unavailable"));
+    const app = await createApp();
+
+    const start = await request(app)
+      .post(loginPath(COMPANY_1))
+      .send({ environmentId: SANDBOX_ENV_1 });
+    expect(start.status, JSON.stringify(start.body)).toBe(201);
+    const sessionId = start.body.sessionId as string;
+
+    harness.releaseGate();
+    await vi.waitFor(async () => {
+      const status = await request(app).get(`${loginPath(COMPANY_1)}/${sessionId}`);
+      expect(status.body.status).toBe("failed");
+      expect(status.body.failure?.reason).toBe("promotion_failed");
+    });
+
+    await expect(lstat(accountHomeDir)).resolves.toBeDefined();
+  });
+
+  it("a secret name conflict succeeds and keeps the account home", async () => {
+    // Two logins for one account can both read no secret and then race the
+    // create call. The loser gets a 409 conflict, which proves the secret
+    // already exists. A repeat login for the same account must be idempotent,
+    // so the loser must report a successful login and must never remove the
+    // account home the winner just wrote.
+    const accountHomeDir = await mkdtemp(path.join(os.tmpdir(), "paperclip-codex-account-home-test-"));
+    accountHomeTestDirs.push(accountHomeDir);
+    mockDeviceLoginPromotion.mockResolvedValueOnce({
+      outcome: "promoted",
+      accountId: "acct-conflict",
+      accountHomeDir,
+      accountHomeCreated: true,
+    });
+    // `vi.resetModules()` in `beforeEach` gives the route module a fresh copy
+    // of `../errors.js`. Import the conflict helper from that same fresh copy,
+    // so the route's `err instanceof HttpError` check sees a matching class.
+    const { conflict: freshConflict } =
+      await vi.importActual<typeof import("../errors.js")>("../errors.js");
+    mockSecretService.create.mockRejectedValueOnce(
+      freshConflict("a secret with this name already exists"),
+    );
+    const app = await createApp();
+
+    const start = await request(app)
+      .post(loginPath(COMPANY_1))
+      .send({ environmentId: SANDBOX_ENV_1 });
+    expect(start.status, JSON.stringify(start.body)).toBe(201);
+    const sessionId = start.body.sessionId as string;
+
+    harness.releaseGate();
+    await vi.waitFor(async () => {
+      const status = await request(app).get(`${loginPath(COMPANY_1)}/${sessionId}`);
+      expect(status.body.status).toBe("authenticated");
+    });
+
+    await expect(lstat(accountHomeDir)).resolves.toBeDefined();
   });
 
   it("fails closed when the account identifier cannot form a valid account home name", async () => {

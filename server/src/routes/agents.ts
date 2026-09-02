@@ -636,12 +636,23 @@ export function agentRoutes(
               },
               { userId: context.startedByUserId, agentId: null },
             );
-          } catch {
-            // No secret named this account's home yet, so this login is the one
-            // that created it. Remove it, so a failed login never leaves an
-            // unaddressable directory behind and the whole operation stays atomic
-            // from the user's view. A later retry recreates the directory.
-            await rm(result.accountHomeDir, { recursive: true, force: true }).catch(() => undefined);
+          } catch (err) {
+            if (err instanceof HttpError && err.status === 409) {
+              // A conflict means a secret with this name already exists. A repeat
+              // login for the same account must be idempotent, so treat this as a
+              // successful login and keep the account home as-is.
+              return;
+            }
+            // The account home write failed for a reason other than a naming
+            // conflict. Remove the directory only when this exact login created
+            // it. The absence of a secret is not proof that this login created
+            // the directory: a user can delete the secret and keep the account
+            // home, so removing it here on every failure could delete a working
+            // credential from an earlier login. A later retry recreates the
+            // directory when this login did create it.
+            if (result.accountHomeCreated) {
+              await rm(result.accountHomeDir, { recursive: true, force: true }).catch(() => undefined);
+            }
             throw new Error(
               "device-login credential promotion rejected: failed to record the account home secret",
             );
