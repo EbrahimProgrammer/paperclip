@@ -277,11 +277,14 @@ function readRunIssueId(context: Record<string, unknown> | null) {
 // wrong home.
 //
 // Each caller must run this function inside `withAccountHomeSecretMutationLock`,
-// the same lock a `local_encrypted` secret rotate holds for its whole write,
-// and must return right after this function resolves with no `await` in
-// between. Otherwise a rotate could commit a new value in the gap between
-// this check and the caller reporting success, so the login would report
-// success for a value that no longer names the account's own home.
+// the same lock a `local_encrypted` secret rotate holds for its whole write.
+// A caller that only checks once, early in the promotion, and then reports
+// success later is not enough on its own: the lock this call held is fully
+// released by the time it returns, so a rotate queued behind it can commit a
+// new value before the login service records its terminal `authenticated`
+// state, which happens well after this call returns (see `runTerminalCommit`
+// below, which runs this same check again, under a fresh lock acquisition,
+// immediately before that terminal state commits).
 async function assertAccountHomeSecretMatches(
   secretsSvc: { resolveSecretValueForDeviceLoginCheck: (companyId: string, secretId: string, context: { configPath: string }) => Promise<string> },
   companyId: string,
@@ -299,14 +302,17 @@ async function assertAccountHomeSecretMatches(
   }
 }
 
-// Confirms no company secret, under any name, still names this account home
-// before a failed promotion deletes the directory. The generated
-// `CODEX_HOME_<handle>` name is not the only secret that can reference this
-// directory: a user can bind a hand-named secret to the same account home, so
-// a check that reads only the generated name misses that secret and deletes
-// a directory it still needs. A bound agent then reads a `CODEX_HOME` value
-// that points at nothing. Only a `local_encrypted` secret can hold a literal
-// directory path, so the scan skips every other provider.
+// Confirms no company secret, under any name or provider, still names this
+// account home before a failed promotion deletes the directory. The
+// generated `CODEX_HOME_<handle>` name is not the only secret that can
+// reference this directory: a user can bind a hand-named secret to the same
+// account home, so a check that reads only the generated name misses that
+// secret and deletes a directory it still needs. A bound agent then reads a
+// `CODEX_HOME` value that points at nothing. A secret's value is a plain
+// string regardless of its provider, so an AWS Secrets Manager-backed secret
+// (or any other provider) can equal this directory's path just as a
+// `local_encrypted` secret can; the scan resolves every secret's value, not
+// only `local_encrypted` ones.
 //
 // A secret whose value fails to resolve is NOT proof that secret names a
 // different directory: the resolve call can fail for a secret that would
@@ -356,7 +362,6 @@ async function anySecretNamesAccountHome(
     let resolutionFailed = false;
     for (const secret of uncheckedSecrets) {
       checkedSecretIds.add(secret.id);
-      if (secret.provider !== "local_encrypted") continue;
       const storedValue = await secretsSvc
         .resolveSecretValueForDeviceLoginCheck(companyId, secret.id, {
           configPath: `secrets.${secret.name}`,
@@ -644,6 +649,21 @@ export function agentRoutes(
   // process owns one instance, so the in-memory prompt and the cancellation
   // controllers persist across requests.
   const adapterLoginStore = createDbAdapterAuthSessionStore(db);
+
+  // The account-home secret a Codex login validated and bound, keyed by
+  // session id, queued for `runTerminalCommit` to reconfirm right before the
+  // login service commits its terminal `authenticated` write. `promote`'s own
+  // check runs under a lock that is fully released by the time `promote`
+  // returns, so a rotation can still land after that check and before the
+  // terminal write; `runTerminalCommit` closes that gap by re-running the
+  // same check under a fresh lock acquisition that it holds across the
+  // terminal write itself. `runTerminalCommit` deletes the entry it reads, so
+  // nothing outlives one login attempt.
+  const pendingAccountHomeSecretCommits = new Map<
+    string,
+    { secretId: string; secretName: string; accountHomeDir: string }
+  >();
+
   const adapterLoginService = createDeviceLoginService({
     store: adapterLoginStore,
     runtime: createProductionLoginSessionRuntime({
@@ -755,22 +775,25 @@ export function agentRoutes(
               // the name alone is not proof of a match.
               //
               // Run the check inside the same lock a `local_encrypted` secret
-              // rotate holds for its whole write. Without the lock, a board
-              // user could rotate this exact secret to a different value in
-              // the gap between the check and the `return` below, so the
-              // login would report success for a value that no longer names
-              // the account's own home. Under the shared lock, a rotate
-              // either finishes (and this check reads its new value) before
-              // this section starts, or it waits for this section — which
-              // returns synchronously right after the check — to finish
-              // first. Either way, no rotate can land inside that gap.
+              // rotate holds for its whole write, the same lock a rotate
+              // takes. This is an early fail-fast only: the lock is fully
+              // released once this call returns, well before the login
+              // service commits its terminal state, so queue the same check
+              // for `runTerminalCommit` to run again right before that
+              // commit, under a fresh lock acquisition it holds across the
+              // commit itself.
               await withAccountHomeSecretMutationLock(undefined, context.companyId, () =>
                 assertAccountHomeSecretMatches(secretsSvc, context.companyId, existingSecret, secretName, accountHomeDir),
               );
+              pendingAccountHomeSecretCommits.set(context.sessionId, {
+                secretId: existingSecret.id,
+                secretName,
+                accountHomeDir,
+              });
               return;
             }
             try {
-              await secretsSvc.create(
+              const createdSecret = await secretsSvc.create(
                 context.companyId,
                 {
                   name: secretName,
@@ -780,6 +803,16 @@ export function agentRoutes(
                 },
                 { userId: context.startedByUserId, agentId: null },
               );
+              // The value just committed is correct at this instant, but a
+              // rotate queued behind the create's own lock can still commit a
+              // different value before the login service records its
+              // terminal state. Queue the same reconfirm `runTerminalCommit`
+              // runs for the two branches above.
+              pendingAccountHomeSecretCommits.set(context.sessionId, {
+                secretId: createdSecret.id,
+                secretName,
+                accountHomeDir,
+              });
             } catch (err) {
               if (err instanceof HttpError && err.status === 409) {
                 // A conflict means a concurrent login for the same account won the
@@ -793,13 +826,17 @@ export function agentRoutes(
                   );
                 }
                 // Same lock and the same reasoning as the pre-existing-secret
-                // check above: hold `withAccountHomeSecretMutationLock` across
-                // the check and the `return`, so a rotate of the winning
-                // secret cannot land in the gap and leave this login
-                // reporting success for a stale value.
+                // check above: an early fail-fast only, so also queue the
+                // same check for `runTerminalCommit` to run again, under a
+                // fresh lock acquisition it holds across the terminal commit.
                 await withAccountHomeSecretMutationLock(undefined, context.companyId, () =>
                   assertAccountHomeSecretMatches(secretsSvc, context.companyId, winningSecret, secretName, accountHomeDir),
                 );
+                pendingAccountHomeSecretCommits.set(context.sessionId, {
+                  secretId: winningSecret.id,
+                  secretName,
+                  accountHomeDir,
+                });
                 return;
               }
               // The account home write failed for a reason other than a naming
@@ -837,6 +874,46 @@ export function agentRoutes(
                 "device-login credential promotion rejected: failed to record the account home secret",
               );
             }
+          });
+        },
+        // The login service calls this immediately before it commits its
+        // terminal `authenticated` write, wrapping that write in the
+        // callback it hands in as `commit`. `promote` above already
+        // validated the bound account-home secret once, early, but its own
+        // lock is fully released by the time `promote` returns — well before
+        // this runs. Re-run the same check here, and hold the SAME lock
+        // across both the check and `commit`, so a rotate cannot land in the
+        // gap between the validated value and the terminal write that
+        // reports it as authenticated: a rotate either finishes (and this
+        // check reads its new value, and rejects) before this section
+        // acquires the lock, or it waits for this section — including the
+        // terminal commit — to finish first.
+        async runTerminalCommit(commit, context) {
+          const pending = pendingAccountHomeSecretCommits.get(context.sessionId);
+          pendingAccountHomeSecretCommits.delete(context.sessionId);
+          if (!pending) {
+            // `promote` never reached a secret bind for this session (for
+            // example, a rejected promotion already failed the login before
+            // the service ever reaches this call). Nothing to reconfirm.
+            return commit();
+          }
+          return withAccountHomeSecretMutationLock(undefined, context.companyId, async () => {
+            // Resolve by the secret's id, not its name: a rotate changes the
+            // value under the same id, so re-resolving this id picks up a
+            // rotation the same way the very first check would have, with no
+            // need to re-look the secret up by name. A deleted secret makes
+            // this resolve call itself fail (unlike a value mismatch, which
+            // `assertAccountHomeSecretMatches` turns into its own error), and
+            // that failure propagates the same way: the login never
+            // authenticates.
+            await assertAccountHomeSecretMatches(
+              secretsSvc,
+              context.companyId,
+              { id: pending.secretId },
+              pending.secretName,
+              pending.accountHomeDir,
+            );
+            return commit();
           });
         },
       },
