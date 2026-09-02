@@ -172,6 +172,7 @@ import { DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX } from "@paperclipai/a
 import {
   checkStagedCredentialReadiness,
   promoteDeviceLoginCredential,
+  withAccountHomeSecretMutationLock,
   withCodexAccountHomePromotionLock,
 } from "@paperclipai/adapter-codex-local/server";
 import {
@@ -317,6 +318,15 @@ async function assertAccountHomeSecretMatches(
 // to check. A scan that keeps finding new secrets on every pass fails
 // closed after a bounded number of passes, so a fast stream of concurrent
 // secret creation cannot force an unsafe delete.
+//
+// The scan alone still cannot rule out a secret write that commits after the
+// scan's own last pass finishes but before the caller's delete runs: the
+// scan and that write are two separate operations with no shared state, so
+// neither can see the other. The caller closes that window by running the
+// scan and the delete inside `withAccountHomeSecretMutationLock`, the same
+// lock every `local_encrypted` secret create or rotate holds for its whole
+// write. That lock is the atomic protection; the multi-pass scan above stays
+// as a defense-in-depth check for a write path that has not taken the lock.
 const ACCOUNT_HOME_CLAIM_SCAN_MAX_PASSES = 5;
 
 async function anySecretNamesAccountHome(
@@ -779,11 +789,22 @@ export function agentRoutes(
               // `accountHomeCreated` alone is not proof no such secret now
               // claims the directory, and a same-name check alone is not proof
               // either, because the claiming secret can carry any name.
+              //
+              // The check and the delete run inside `withAccountHomeSecretMutationLock`,
+              // the same lock the secrets service holds for the whole of a
+              // `local_encrypted` secret's create or rotate call. That closes the
+              // window `anySecretNamesAccountHome`'s own multi-pass scan cannot: a
+              // secret write that commits after this check's last pass but before
+              // the delete runs. Under the shared lock, a write either finishes
+              // (and becomes visible to the check) before this section acquires the
+              // lock, or it waits for this section to finish before it can commit.
               if (result.accountHomeCreated) {
-                const claimed = await anySecretNamesAccountHome(secretsSvc, context.companyId, accountHomeDir);
-                if (!claimed) {
-                  await rm(accountHomeDir, { recursive: true, force: true }).catch(() => undefined);
-                }
+                await withAccountHomeSecretMutationLock(undefined, context.companyId, async () => {
+                  const claimed = await anySecretNamesAccountHome(secretsSvc, context.companyId, accountHomeDir);
+                  if (!claimed) {
+                    await rm(accountHomeDir, { recursive: true, force: true }).catch(() => undefined);
+                  }
+                });
               }
               throw new Error(
                 "device-login credential promotion rejected: failed to record the account home secret",

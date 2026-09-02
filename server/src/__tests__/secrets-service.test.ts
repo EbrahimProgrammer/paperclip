@@ -360,6 +360,102 @@ describeEmbeddedPostgres("secretService", () => {
     ).rejects.toThrow(/already exists/i);
   });
 
+  it("serializes two local_encrypted secret creates in the same company so their writes never overlap", async () => {
+    // An account-home cleanup's claimant scan and a `local_encrypted` secret
+    // write share one lock (`withAccountHomeSecretMutationLock`), so a write
+    // can never commit inside the exact window the scan already used to
+    // decide no secret claims a directory it is about to delete. This proves
+    // the lock itself enforces that: two `local_encrypted` creates in the
+    // SAME company never run their provider write at the same time,
+    // whichever caller goes first.
+    const companyId = await seedCompany();
+    const svc = secretService(db);
+    const events: string[] = [];
+    let releaseFirstWrite!: () => void;
+    const firstWriteGate = new Promise<void>((resolve) => {
+      releaseFirstWrite = resolve;
+    });
+    const originalCreateSecret = localEncryptedProvider.createSecret.bind(localEncryptedProvider);
+    vi.spyOn(localEncryptedProvider, "createSecret")
+      .mockImplementationOnce(async (input) => {
+        events.push("first-provider-enter");
+        await firstWriteGate;
+        events.push("first-provider-exit");
+        return originalCreateSecret(input);
+      })
+      .mockImplementationOnce(async (input) => {
+        events.push("second-provider-enter");
+        return originalCreateSecret(input);
+      });
+
+    const firstCreate = svc.create(companyId, {
+      name: `account-home-${randomUUID()}`,
+      provider: "local_encrypted",
+      value: "/company/codex-home/acct-a",
+    });
+    // Give the first call a chance to acquire the lock and enter its provider
+    // write before the second call starts racing for the same lock.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const secondCreate = svc.create(companyId, {
+      name: `hand-named-${randomUUID()}`,
+      provider: "local_encrypted",
+      value: "/company/codex-home/acct-a",
+    });
+    // The second call must stay blocked on the lock while the first call
+    // still holds it: it must never enter its own provider write before the
+    // first call's provider write exits.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(events).toEqual(["first-provider-enter"]);
+
+    releaseFirstWrite();
+    await Promise.all([firstCreate, secondCreate]);
+    expect(events).toEqual(["first-provider-enter", "first-provider-exit", "second-provider-enter"]);
+  });
+
+  it("serializes a local_encrypted secret rotate against a concurrent create of a different secret in the same company", async () => {
+    // Same lock, the other write path: a rotate that writes a new
+    // `local_encrypted` value must serialize against a concurrent create the
+    // same way a create serializes against another create.
+    const companyId = await seedCompany();
+    const svc = secretService(db);
+    const existing = await svc.create(companyId, {
+      name: `existing-${randomUUID()}`,
+      provider: "local_encrypted",
+      value: "/company/codex-home/acct-b",
+    });
+    const events: string[] = [];
+    let releaseRotateWrite!: () => void;
+    const rotateWriteGate = new Promise<void>((resolve) => {
+      releaseRotateWrite = resolve;
+    });
+    const originalCreateVersion = localEncryptedProvider.createVersion.bind(localEncryptedProvider);
+    vi.spyOn(localEncryptedProvider, "createVersion").mockImplementationOnce(async (input) => {
+      events.push("rotate-provider-enter");
+      await rotateWriteGate;
+      events.push("rotate-provider-exit");
+      return originalCreateVersion(input);
+    });
+    const originalCreateSecret = localEncryptedProvider.createSecret.bind(localEncryptedProvider);
+    vi.spyOn(localEncryptedProvider, "createSecret").mockImplementationOnce(async (input) => {
+      events.push("create-provider-enter");
+      return originalCreateSecret(input);
+    });
+
+    const rotateCall = svc.rotate(existing.id, { value: "/company/codex-home/acct-b-rotated" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const createCall = svc.create(companyId, {
+      name: `hand-named-${randomUUID()}`,
+      provider: "local_encrypted",
+      value: "/company/codex-home/acct-b",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(events).toEqual(["rotate-provider-enter"]);
+
+    releaseRotateWrite();
+    await Promise.all([rotateCall, createCall]);
+    expect(events).toEqual(["rotate-provider-enter", "rotate-provider-exit", "create-provider-enter"]);
+  });
+
   it("validates the access namespace as agent-only with env-style aliases", async () => {
     const companyId = await seedCompany();
     const svc = secretService(db);

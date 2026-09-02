@@ -12,6 +12,7 @@ import {
   resolveCodexAuthCacheEntryPath,
   selectVendCredential,
   toCacheKey,
+  withAccountHomeSecretMutationLock,
   withCodexAccountHomePromotionLock,
 } from "./codex-auth-cache.js";
 import { resolveSharedCodexHomeDir } from "./codex-home.js";
@@ -423,6 +424,96 @@ describe("codex auth cache store", () => {
       releaseCompanyA();
       await companyACall;
       expect(events).toEqual(["a-enter", "b-enter", "b-exit", "a-exit"]);
+    });
+  });
+
+  describe("Phase 7: account-home secret-mutation serialization for one company", () => {
+    it("withAccountHomeSecretMutationLock never overlaps two concurrent callers for the same company", async () => {
+      // The secrets service holds this lock for the whole of a `local_encrypted`
+      // secret's create or rotate call, and an account-home cleanup's claimant
+      // scan holds it for the whole of its final check-and-delete step. This
+      // proves the lock itself enforces mutual exclusion between any two
+      // holders for one company, whichever caller goes first.
+      const home = await makeInstanceRoot();
+      const env = envFor(home);
+      const events: string[] = [];
+      let releaseFirstCaller!: () => void;
+      const firstCallerGate = new Promise<void>((resolve) => {
+        releaseFirstCaller = resolve;
+      });
+
+      const firstCall = withAccountHomeSecretMutationLock(env, "company-shared", async () => {
+        events.push("first-enter");
+        await firstCallerGate;
+        events.push("first-exit");
+        return "first";
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const secondCall = withAccountHomeSecretMutationLock(env, "company-shared", async () => {
+        events.push("second-enter");
+        events.push("second-exit");
+        return "second";
+      });
+      // The second caller must stay blocked on the lock while the first
+      // caller still holds it: it must never log `second-enter` before the
+      // first caller's `first-exit`.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(events).toEqual(["first-enter"]);
+
+      releaseFirstCaller();
+      const [first, second] = await Promise.all([firstCall, secondCall]);
+      expect(first).toBe("first");
+      expect(second).toBe("second");
+      expect(events).toEqual(["first-enter", "first-exit", "second-enter", "second-exit"]);
+    });
+
+    it("withAccountHomeSecretMutationLock keeps two different companies independent", async () => {
+      const home = await makeInstanceRoot();
+      const env = envFor(home);
+      const events: string[] = [];
+      let releaseCompanyA!: () => void;
+      const companyAGate = new Promise<void>((resolve) => {
+        releaseCompanyA = resolve;
+      });
+
+      const companyACall = withAccountHomeSecretMutationLock(env, "company-a", async () => {
+        events.push("a-enter");
+        await companyAGate;
+        events.push("a-exit");
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const companyBCall = withAccountHomeSecretMutationLock(env, "company-b", async () => {
+        events.push("b-enter");
+        events.push("b-exit");
+      });
+      await companyBCall;
+      expect(events).toEqual(["a-enter", "b-enter", "b-exit"]);
+
+      releaseCompanyA();
+      await companyACall;
+      expect(events).toEqual(["a-enter", "b-enter", "b-exit", "a-exit"]);
+    });
+
+    it("withAccountHomeSecretMutationLock does not contend with withCodexAccountHomePromotionLock for the same company", async () => {
+      // The two locks use separate lock directories (Security condition: no
+      // shared lock key), so a device-login promotion that holds
+      // `withCodexAccountHomePromotionLock` for its whole sequence can still
+      // call into a secrets-service write that takes this lock without
+      // deadlocking on itself.
+      const home = await makeInstanceRoot();
+      const env = envFor(home);
+      const events: string[] = [];
+
+      await withCodexAccountHomePromotionLock(env, "company-shared", async () => {
+        events.push("promotion-enter");
+        await withAccountHomeSecretMutationLock(env, "company-shared", async () => {
+          events.push("mutation-enter");
+          events.push("mutation-exit");
+        });
+        events.push("promotion-exit");
+      });
+
+      expect(events).toEqual(["promotion-enter", "mutation-enter", "mutation-exit", "promotion-exit"]);
     });
   });
 });

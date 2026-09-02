@@ -65,6 +65,15 @@ import { isSecretProviderClientError } from "../secrets/types.js";
 import { authorizationDeniedDetails, authorizationService } from "./authorization.js";
 import { findActiveServerAdapter } from "../adapters/index.js";
 import { logActivity } from "./activity-log.js";
+// Only a `local_encrypted` secret can hold a literal directory path, so only a
+// `local_encrypted` secret can ever name a Codex account-home directory. A
+// create or a rotate that writes a new `local_encrypted` value runs inside
+// this lock for its whole call, so it can never commit a value in the exact
+// window an account-home cleanup's claimant scan already decided "no
+// claimant" but has not yet deleted the directory. See
+// `withAccountHomeSecretMutationLock`'s own comment in the codex-local
+// adapter for the full race this closes.
+import { withAccountHomeSecretMutationLock } from "@paperclipai/adapter-codex-local/server";
 
 const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const AGENT_ACCESS_CONFIG_PATH_PREFIX = "access.";
@@ -1980,7 +1989,26 @@ export function secretService(db: Db | DbTransaction) {
     };
   }
 
+  // Every `local_encrypted` secret this function creates runs under
+  // `withAccountHomeSecretMutationLock`, so its write can never commit inside
+  // the window a Codex account-home cleanup already used to decide no secret
+  // claims the directory it is about to delete.
   async function createManagedLocalSecret(
+    companyId: string,
+    input: {
+      name: string;
+      key: string;
+      value: string;
+      description?: string | null;
+    },
+    actor?: { userId?: string | null; agentId?: string | null },
+  ) {
+    return withAccountHomeSecretMutationLock(undefined, companyId, () =>
+      createManagedLocalSecretUnlocked(companyId, input, actor),
+    );
+  }
+
+  async function createManagedLocalSecretUnlocked(
     companyId: string,
     input: {
       name: string;
@@ -2094,6 +2122,433 @@ export function secretService(db: Db | DbTransaction) {
       }
       await db.delete(companySecretVersions).where(eq(companySecretVersions.secretId, reservedSecret.id)).catch(() => undefined);
       await db.delete(companySecrets).where(eq(companySecrets.id, reservedSecret.id)).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  // The body `create:` below runs, unchanged. Extracted to a named function so
+  // `create:` can wrap it in `withAccountHomeSecretMutationLock` only for the
+  // one provider (`local_encrypted`) that can hold a literal directory path,
+  // without duplicating this whole write sequence.
+  async function createSecretUnlocked(
+    companyId: string,
+    input: {
+      name: string;
+      provider: SecretProvider;
+      providerConfigId?: string | null;
+      value?: string | null;
+      key?: string | null;
+      managedMode?: "paperclip_managed" | "external_reference";
+      description?: string | null;
+      externalRef?: string | null;
+      providerVersionRef?: string | null;
+      providerMetadata?: Record<string, unknown> | null;
+    },
+    actor?: { userId?: string | null; agentId?: string | null },
+  ) {
+    const existing = await getByName(companyId, input.name);
+    if (existing) throw conflict(`Secret already exists: ${input.name}`);
+    const key = normalizeSecretKey(input.key ?? input.name);
+    if (!key) throw unprocessable("Secret key is required");
+    const duplicateKey = await db
+      .select()
+      .from(companySecrets)
+      .where(and(
+        eq(companySecrets.companyId, companyId),
+        eq(companySecrets.scope, "company"),
+        eq(companySecrets.key, key),
+        ne(companySecrets.status, "deleted"),
+      ))
+      .then((rows) => rows[0] ?? null);
+    if (duplicateKey) throw conflict(`Secret key already exists: ${key}`);
+
+    const managedMode = input.managedMode ?? "paperclip_managed";
+    const provider = getSecretProvider(input.provider);
+    const providerConfig = await getSelectableRuntimeProviderConfig({
+      companyId,
+      provider: input.provider,
+      providerConfigId: input.providerConfigId,
+    });
+    if (managedMode === "external_reference" && !input.externalRef?.trim()) {
+      throw unprocessable("External reference secrets require externalRef");
+    }
+    if (managedMode === "paperclip_managed" && input.externalRef?.trim()) {
+      throw unprocessable("Managed secrets cannot override externalRef");
+    }
+    if (managedMode === "paperclip_managed" && !input.value?.trim()) {
+      throw unprocessable("Managed secrets require value");
+    }
+    const providerWriteContext = {
+      companyId,
+      secretKey: key,
+      secretName: input.name,
+      version: 1,
+    };
+    const reservedSecret = await db
+      .insert(companySecrets)
+      .values({
+        companyId,
+        key,
+        name: input.name,
+        provider: input.provider,
+        providerConfigId: input.providerConfigId ?? null,
+        status: "archived",
+        managedMode,
+        externalRef: null,
+        providerMetadata: input.providerMetadata ?? null,
+        latestVersion: 0,
+        description: input.description ?? null,
+        createdByAgentId: actor?.agentId ?? null,
+        createdByUserId: actor?.userId ?? null,
+      })
+      .returning()
+      .then((rows) => rows[0]);
+
+    let prepared: PreparedSecretVersion;
+    try {
+      prepared =
+        managedMode === "external_reference"
+          ? await provider.linkExternalSecret({
+              externalRef: input.externalRef ?? "",
+              providerVersionRef: input.providerVersionRef ?? null,
+              providerConfig,
+              context: providerWriteContext,
+            })
+          : await provider.createSecret({
+              value: input.value ?? "",
+              externalRef: null,
+              providerConfig,
+              context: providerWriteContext,
+            });
+    } catch (error) {
+      throw await throwProviderWriteOrReservedRowRollbackError({
+        error,
+        rollbackReservedRow: () => db.delete(companySecrets).where(eq(companySecrets.id, reservedSecret.id)),
+        companyId,
+        provider: provider.id,
+        providerConfigId: input.providerConfigId ?? null,
+        providerConfig,
+        operation: "secret.create",
+      });
+    }
+
+    try {
+      await db
+        .update(companySecrets)
+        .set({
+          externalRef: prepared.externalRef,
+          latestVersion: 1,
+          updatedAt: new Date(),
+        })
+        .where(eq(companySecrets.id, reservedSecret.id));
+      await db.insert(companySecretVersions).values({
+        secretId: reservedSecret.id,
+        version: 1,
+        material: prepared.material,
+        valueSha256: prepared.valueSha256,
+        fingerprintSha256: prepared.fingerprintSha256 ?? prepared.valueSha256,
+        providerVersionRef: prepared.providerVersionRef ?? null,
+        status: "disabled",
+        createdByAgentId: actor?.agentId ?? null,
+        createdByUserId: actor?.userId ?? null,
+      });
+    } catch (error) {
+      if (managedMode === "paperclip_managed") {
+        const cleaned = await cleanupPreparedProviderWrite({
+          provider,
+          prepared,
+          providerConfig,
+          context: providerWriteContext,
+          mode: "delete",
+          operation: "create.prepare_rollback",
+        });
+        if (!cleaned) {
+          throwProviderCleanupFailedAfterCreateRollback({
+            companyId,
+            provider: provider.id,
+            providerConfigId: input.providerConfigId ?? null,
+            providerConfig,
+            operation: "create.prepare_rollback",
+          });
+        }
+      }
+      await deleteLocalSecretCreateReservationOrThrow({
+        db,
+        secretId: reservedSecret.id,
+        companyId,
+        provider: provider.id,
+        providerConfigId: input.providerConfigId ?? null,
+        providerConfig,
+        operation: "create.prepare_rollback",
+      });
+      throw error;
+    }
+
+    try {
+      return await db.transaction(async (tx) => {
+        await tx
+          .update(companySecretVersions)
+          .set({ status: "current" })
+          .where(and(
+            eq(companySecretVersions.secretId, reservedSecret.id),
+            eq(companySecretVersions.version, 1),
+          ));
+
+        const secret = await tx
+          .update(companySecrets)
+          .set({
+            status: "active",
+            externalRef: prepared.externalRef,
+            latestVersion: 1,
+            lastRotatedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(companySecrets.id, reservedSecret.id))
+          .returning()
+          .then((rows) => rows[0]);
+
+        if (!secret) throw notFound("Secret not found");
+        return secret;
+      });
+    } catch (error) {
+      if (managedMode === "paperclip_managed") {
+        const cleaned = await cleanupPreparedProviderWrite({
+          provider,
+          prepared,
+          providerConfig,
+          context: providerWriteContext,
+          mode: "delete",
+          operation: "create.rollback",
+        });
+        if (!cleaned) {
+          throwProviderCleanupFailedAfterCreateRollback({
+            companyId,
+            provider: provider.id,
+            providerConfigId: input.providerConfigId ?? null,
+            providerConfig,
+            operation: "create.rollback",
+          });
+        }
+      }
+      await deleteLocalSecretCreateReservationOrThrow({
+        db,
+        secretId: reservedSecret.id,
+        companyId,
+        provider: provider.id,
+        providerConfigId: input.providerConfigId ?? null,
+        providerConfig,
+        operation: "create.rollback",
+      });
+      throw error;
+    }
+  }
+
+  // The body of `rotate:` below, unchanged. Extracted to a named function so
+  // `rotate:` can wrap it in `withAccountHomeSecretMutationLock` only when the
+  // secret being rotated is `local_encrypted`, without duplicating this whole
+  // write sequence.
+  async function rotateUnlocked(
+    secretId: string,
+    input: {
+      value?: string | null;
+      externalRef?: string | null;
+      providerVersionRef?: string | null;
+      providerConfigId?: string | null;
+      // The optional owner-bound compare-and-set guard. When set, the final
+      // update matches the latest version, so a concurrent rotation between the
+      // read and the write cannot pass. A mismatch throws a 409 conflict.
+      expectedLatestVersion?: number;
+    },
+    actor?: { userId?: string | null; agentId?: string | null },
+  ) {
+    const secret = await getById(secretId);
+    if (!secret) throw notFound("Secret not found");
+    if (secret.status !== "active") throw unprocessable("Cannot rotate a non-active secret");
+    if (input.expectedLatestVersion !== undefined && secret.latestVersion !== input.expectedLatestVersion) {
+      throw conflict(SECRET_VERSION_STALE_CONFLICT);
+    }
+    const providerId = secret.provider as SecretProvider;
+    const provider = getSecretProvider(providerId);
+    const providerConfigId =
+      input.providerConfigId === undefined ? secret.providerConfigId : input.providerConfigId;
+    const providerConfig = await getSelectableRuntimeProviderConfig({
+      companyId: secret.companyId,
+      provider: providerId,
+      providerConfigId,
+    });
+    const nextVersion = secret.latestVersion + 1;
+    const externalValueWrite =
+      secret.managedMode === "external_reference" && Boolean(input.value?.trim());
+    if (externalValueWrite) {
+      const currentRef = secret.externalRef?.trim();
+      if (!currentRef) {
+        throw unprocessable("External reference secrets require externalRef");
+      }
+      if (input.externalRef?.trim() && input.externalRef.trim() !== currentRef) {
+        throw unprocessable(
+          "Provide either a new value or a new external reference, not both",
+        );
+      }
+      if (input.providerVersionRef?.trim()) {
+        throw unprocessable("Value updates cannot pin providerVersionRef");
+      }
+      if (!provider.updateExternalSecretValue) {
+        throw unprocessable(
+          `${provider.descriptor().label} does not support writing values to external reference secrets`,
+        );
+      }
+    }
+    if (secret.managedMode === "external_reference" && !(input.externalRef ?? secret.externalRef)?.trim()) {
+      throw unprocessable("External reference secrets require externalRef");
+    }
+    if (secret.managedMode !== "external_reference" && input.externalRef?.trim()) {
+      throw unprocessable("Managed secrets cannot override externalRef");
+    }
+    if (secret.managedMode !== "external_reference" && !input.value?.trim()) {
+      throw unprocessable("Managed secrets require value");
+    }
+    const providerWriteContext = {
+      companyId: secret.companyId,
+      secretKey: secret.key,
+      secretName: secret.name,
+      version: nextVersion,
+    };
+    let prepared: PreparedSecretVersion;
+    try {
+      prepared = externalValueWrite
+        ? await provider.updateExternalSecretValue!({
+            externalRef: secret.externalRef ?? "",
+            value: input.value ?? "",
+            providerConfig,
+            context: providerWriteContext,
+          })
+        : secret.managedMode === "external_reference"
+          ? await provider.linkExternalSecret({
+              externalRef: input.externalRef ?? secret.externalRef ?? "",
+              providerVersionRef: input.providerVersionRef ?? null,
+              providerConfig,
+              context: providerWriteContext,
+            })
+          : await provider.createVersion({
+              value: input.value ?? "",
+              externalRef: secret.externalRef ?? null,
+              providerConfig,
+              context: providerWriteContext,
+            });
+    } catch (error) {
+      throw remoteProviderWriteHttpError(error, {
+        companyId: secret.companyId,
+        provider: provider.id,
+        providerConfigId,
+        providerConfig,
+        operation: "secret.rotate",
+      });
+    }
+
+    try {
+      await db.insert(companySecretVersions).values({
+        secretId: secret.id,
+        version: nextVersion,
+        material: prepared.material,
+        valueSha256: prepared.valueSha256,
+        fingerprintSha256: prepared.fingerprintSha256 ?? prepared.valueSha256,
+        providerVersionRef: prepared.providerVersionRef ?? null,
+        status: "disabled",
+        createdByAgentId: actor?.agentId ?? null,
+        createdByUserId: actor?.userId ?? null,
+      });
+    } catch (error) {
+      if (secret.managedMode !== "external_reference" || externalValueWrite) {
+        await cleanupPreparedProviderWrite({
+          provider,
+          prepared,
+          providerConfig,
+          context: providerWriteContext,
+          mode: "archive",
+          operation: "rotate.prepare_rollback",
+        });
+      }
+      // A guarded concurrent rotation inserted the same next version first, so
+      // this insert fails the (secretId, version) unique index. The loser never
+      // reaches the compare-and-set guard below. Normalize only that one
+      // collision to the same stale conflict, so a guarded rotation always
+      // returns one fixed 409. Re-throw every other error unchanged.
+      if (
+        input.expectedLatestVersion !== undefined &&
+        isUniqueConstraintViolation(error, COMPANY_SECRET_VERSION_UNIQUE_CONSTRAINT)
+      ) {
+        throw conflict(SECRET_VERSION_STALE_CONFLICT);
+      }
+      throw error;
+    }
+
+    try {
+      return await db.transaction(async (tx) => {
+        await tx
+          .update(companySecretVersions)
+          .set({ status: "previous" })
+          .where(and(
+            eq(companySecretVersions.secretId, secret.id),
+            ne(companySecretVersions.version, nextVersion),
+          ));
+        await tx
+          .update(companySecretVersions)
+          .set({ status: "current" })
+          .where(and(
+            eq(companySecretVersions.secretId, secret.id),
+            eq(companySecretVersions.version, nextVersion),
+          ));
+
+        const updated = await tx
+          .update(companySecrets)
+          .set({
+            latestVersion: nextVersion,
+            externalRef: prepared.externalRef,
+            providerConfigId,
+            lastRotatedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(and(
+            eq(companySecrets.id, secret.id),
+            // The compare-and-set guard. It matches the latest version, so a
+            // concurrent rotation that already bumped it fails this predicate.
+            input.expectedLatestVersion === undefined
+              ? undefined
+              : eq(companySecrets.latestVersion, input.expectedLatestVersion),
+          ))
+          .returning()
+          .then((rows) => rows[0] ?? null);
+
+        if (!updated) {
+          // The predicate matched no row. A supplied expected version means a
+          // concurrent rotation won the race; return the stale conflict. An
+          // unguarded rotation means the secret is gone.
+          throw input.expectedLatestVersion === undefined
+            ? notFound("Secret not found")
+            : conflict(SECRET_VERSION_STALE_CONFLICT);
+        }
+        return updated;
+      });
+    } catch (error) {
+      if (secret.managedMode !== "external_reference" || externalValueWrite) {
+        const cleaned = await cleanupPreparedProviderWrite({
+          provider,
+          prepared,
+          providerConfig,
+          context: providerWriteContext,
+          mode: "archive",
+          operation: "rotate.rollback",
+        });
+        if (cleaned) {
+          await db
+            .delete(companySecretVersions)
+            .where(and(
+              eq(companySecretVersions.secretId, secret.id),
+              eq(companySecretVersions.version, nextVersion),
+            ))
+            .catch(() => undefined);
+        }
+      }
       throw error;
     }
   }
@@ -3905,6 +4360,9 @@ export function secretService(db: Db | DbTransaction) {
     resolveSecretValueForSandboxCleanup,
     resolveSecretValueForDeviceLoginCheck,
 
+    // Only a `local_encrypted` secret can hold a literal directory path, so
+    // only that provider's create runs inside `withAccountHomeSecretMutationLock`.
+    // Every other provider's create runs unlocked, unchanged.
     create: async (
       companyId: string,
       input: {
@@ -3921,203 +4379,20 @@ export function secretService(db: Db | DbTransaction) {
       },
       actor?: { userId?: string | null; agentId?: string | null },
     ) => {
-      const existing = await getByName(companyId, input.name);
-      if (existing) throw conflict(`Secret already exists: ${input.name}`);
-      const key = normalizeSecretKey(input.key ?? input.name);
-      if (!key) throw unprocessable("Secret key is required");
-      const duplicateKey = await db
-        .select()
-        .from(companySecrets)
-        .where(and(
-          eq(companySecrets.companyId, companyId),
-          eq(companySecrets.scope, "company"),
-          eq(companySecrets.key, key),
-          ne(companySecrets.status, "deleted"),
-        ))
-        .then((rows) => rows[0] ?? null);
-      if (duplicateKey) throw conflict(`Secret key already exists: ${key}`);
-
-      const managedMode = input.managedMode ?? "paperclip_managed";
-      const provider = getSecretProvider(input.provider);
-      const providerConfig = await getSelectableRuntimeProviderConfig({
-        companyId,
-        provider: input.provider,
-        providerConfigId: input.providerConfigId,
-      });
-      if (managedMode === "external_reference" && !input.externalRef?.trim()) {
-        throw unprocessable("External reference secrets require externalRef");
+      if (input.provider !== "local_encrypted") {
+        return createSecretUnlocked(companyId, input, actor);
       }
-      if (managedMode === "paperclip_managed" && input.externalRef?.trim()) {
-        throw unprocessable("Managed secrets cannot override externalRef");
-      }
-      if (managedMode === "paperclip_managed" && !input.value?.trim()) {
-        throw unprocessable("Managed secrets require value");
-      }
-      const providerWriteContext = {
-        companyId,
-        secretKey: key,
-        secretName: input.name,
-        version: 1,
-      };
-      const reservedSecret = await db
-        .insert(companySecrets)
-        .values({
-          companyId,
-          key,
-          name: input.name,
-          provider: input.provider,
-          providerConfigId: input.providerConfigId ?? null,
-          status: "archived",
-          managedMode,
-          externalRef: null,
-          providerMetadata: input.providerMetadata ?? null,
-          latestVersion: 0,
-          description: input.description ?? null,
-          createdByAgentId: actor?.agentId ?? null,
-          createdByUserId: actor?.userId ?? null,
-        })
-        .returning()
-        .then((rows) => rows[0]);
-
-      let prepared: PreparedSecretVersion;
-      try {
-        prepared =
-          managedMode === "external_reference"
-            ? await provider.linkExternalSecret({
-                externalRef: input.externalRef ?? "",
-                providerVersionRef: input.providerVersionRef ?? null,
-                providerConfig,
-                context: providerWriteContext,
-              })
-            : await provider.createSecret({
-                value: input.value ?? "",
-                externalRef: null,
-                providerConfig,
-                context: providerWriteContext,
-              });
-      } catch (error) {
-        throw await throwProviderWriteOrReservedRowRollbackError({
-          error,
-          rollbackReservedRow: () => db.delete(companySecrets).where(eq(companySecrets.id, reservedSecret.id)),
-          companyId,
-          provider: provider.id,
-          providerConfigId: input.providerConfigId ?? null,
-          providerConfig,
-          operation: "secret.create",
-        });
-      }
-
-      try {
-        await db
-          .update(companySecrets)
-          .set({
-            externalRef: prepared.externalRef,
-            latestVersion: 1,
-            updatedAt: new Date(),
-          })
-          .where(eq(companySecrets.id, reservedSecret.id));
-        await db.insert(companySecretVersions).values({
-          secretId: reservedSecret.id,
-          version: 1,
-          material: prepared.material,
-          valueSha256: prepared.valueSha256,
-          fingerprintSha256: prepared.fingerprintSha256 ?? prepared.valueSha256,
-          providerVersionRef: prepared.providerVersionRef ?? null,
-          status: "disabled",
-          createdByAgentId: actor?.agentId ?? null,
-          createdByUserId: actor?.userId ?? null,
-        });
-      } catch (error) {
-        if (managedMode === "paperclip_managed") {
-          const cleaned = await cleanupPreparedProviderWrite({
-            provider,
-            prepared,
-            providerConfig,
-            context: providerWriteContext,
-            mode: "delete",
-            operation: "create.prepare_rollback",
-          });
-          if (!cleaned) {
-            throwProviderCleanupFailedAfterCreateRollback({
-              companyId,
-              provider: provider.id,
-              providerConfigId: input.providerConfigId ?? null,
-              providerConfig,
-              operation: "create.prepare_rollback",
-            });
-          }
-        }
-        await deleteLocalSecretCreateReservationOrThrow({
-          db,
-          secretId: reservedSecret.id,
-          companyId,
-          provider: provider.id,
-          providerConfigId: input.providerConfigId ?? null,
-          providerConfig,
-          operation: "create.prepare_rollback",
-        });
-        throw error;
-      }
-
-      try {
-        return await db.transaction(async (tx) => {
-          await tx
-            .update(companySecretVersions)
-            .set({ status: "current" })
-            .where(and(
-              eq(companySecretVersions.secretId, reservedSecret.id),
-              eq(companySecretVersions.version, 1),
-            ));
-
-          const secret = await tx
-            .update(companySecrets)
-            .set({
-              status: "active",
-              externalRef: prepared.externalRef,
-              latestVersion: 1,
-              lastRotatedAt: new Date(),
-              updatedAt: new Date(),
-            })
-            .where(eq(companySecrets.id, reservedSecret.id))
-            .returning()
-            .then((rows) => rows[0]);
-
-          if (!secret) throw notFound("Secret not found");
-          return secret;
-        });
-      } catch (error) {
-        if (managedMode === "paperclip_managed") {
-          const cleaned = await cleanupPreparedProviderWrite({
-            provider,
-            prepared,
-            providerConfig,
-            context: providerWriteContext,
-            mode: "delete",
-            operation: "create.rollback",
-          });
-          if (!cleaned) {
-            throwProviderCleanupFailedAfterCreateRollback({
-              companyId,
-              provider: provider.id,
-              providerConfigId: input.providerConfigId ?? null,
-              providerConfig,
-              operation: "create.rollback",
-            });
-          }
-        }
-        await deleteLocalSecretCreateReservationOrThrow({
-          db,
-          secretId: reservedSecret.id,
-          companyId,
-          provider: provider.id,
-          providerConfigId: input.providerConfigId ?? null,
-          providerConfig,
-          operation: "create.rollback",
-        });
-        throw error;
-      }
+      return withAccountHomeSecretMutationLock(undefined, companyId, () =>
+        createSecretUnlocked(companyId, input, actor),
+      );
     },
 
+    // A pre-check reads the secret to find its provider and company. Only a
+    // `local_encrypted` secret's rotate then runs inside
+    // `withAccountHomeSecretMutationLock`; every other provider's rotate runs
+    // unlocked, unchanged. `rotateUnlocked` re-reads the secret under the lock,
+    // so a rotation that lost a race between the pre-check and the lock still
+    // sees current state, not the pre-check's stale read.
     rotate: async (
       secretId: string,
       input: {
@@ -4125,203 +4400,18 @@ export function secretService(db: Db | DbTransaction) {
         externalRef?: string | null;
         providerVersionRef?: string | null;
         providerConfigId?: string | null;
-        // The optional owner-bound compare-and-set guard. When set, the final
-        // update matches the latest version, so a concurrent rotation between the
-        // read and the write cannot pass. A mismatch throws a 409 conflict.
         expectedLatestVersion?: number;
       },
       actor?: { userId?: string | null; agentId?: string | null },
     ) => {
-      const secret = await getById(secretId);
-      if (!secret) throw notFound("Secret not found");
-      if (secret.status !== "active") throw unprocessable("Cannot rotate a non-active secret");
-      if (input.expectedLatestVersion !== undefined && secret.latestVersion !== input.expectedLatestVersion) {
-        throw conflict(SECRET_VERSION_STALE_CONFLICT);
+      const preCheckSecret = await getById(secretId);
+      if (!preCheckSecret) throw notFound("Secret not found");
+      if (preCheckSecret.provider !== "local_encrypted") {
+        return rotateUnlocked(secretId, input, actor);
       }
-      const providerId = secret.provider as SecretProvider;
-      const provider = getSecretProvider(providerId);
-      const providerConfigId =
-        input.providerConfigId === undefined ? secret.providerConfigId : input.providerConfigId;
-      const providerConfig = await getSelectableRuntimeProviderConfig({
-        companyId: secret.companyId,
-        provider: providerId,
-        providerConfigId,
-      });
-      const nextVersion = secret.latestVersion + 1;
-      const externalValueWrite =
-        secret.managedMode === "external_reference" && Boolean(input.value?.trim());
-      if (externalValueWrite) {
-        const currentRef = secret.externalRef?.trim();
-        if (!currentRef) {
-          throw unprocessable("External reference secrets require externalRef");
-        }
-        if (input.externalRef?.trim() && input.externalRef.trim() !== currentRef) {
-          throw unprocessable(
-            "Provide either a new value or a new external reference, not both",
-          );
-        }
-        if (input.providerVersionRef?.trim()) {
-          throw unprocessable("Value updates cannot pin providerVersionRef");
-        }
-        if (!provider.updateExternalSecretValue) {
-          throw unprocessable(
-            `${provider.descriptor().label} does not support writing values to external reference secrets`,
-          );
-        }
-      }
-      if (secret.managedMode === "external_reference" && !(input.externalRef ?? secret.externalRef)?.trim()) {
-        throw unprocessable("External reference secrets require externalRef");
-      }
-      if (secret.managedMode !== "external_reference" && input.externalRef?.trim()) {
-        throw unprocessable("Managed secrets cannot override externalRef");
-      }
-      if (secret.managedMode !== "external_reference" && !input.value?.trim()) {
-        throw unprocessable("Managed secrets require value");
-      }
-      const providerWriteContext = {
-        companyId: secret.companyId,
-        secretKey: secret.key,
-        secretName: secret.name,
-        version: nextVersion,
-      };
-      let prepared: PreparedSecretVersion;
-      try {
-        prepared = externalValueWrite
-          ? await provider.updateExternalSecretValue!({
-              externalRef: secret.externalRef ?? "",
-              value: input.value ?? "",
-              providerConfig,
-              context: providerWriteContext,
-            })
-          : secret.managedMode === "external_reference"
-            ? await provider.linkExternalSecret({
-                externalRef: input.externalRef ?? secret.externalRef ?? "",
-                providerVersionRef: input.providerVersionRef ?? null,
-                providerConfig,
-                context: providerWriteContext,
-              })
-            : await provider.createVersion({
-                value: input.value ?? "",
-                externalRef: secret.externalRef ?? null,
-                providerConfig,
-                context: providerWriteContext,
-              });
-      } catch (error) {
-        throw remoteProviderWriteHttpError(error, {
-          companyId: secret.companyId,
-          provider: provider.id,
-          providerConfigId,
-          providerConfig,
-          operation: "secret.rotate",
-        });
-      }
-
-      try {
-        await db.insert(companySecretVersions).values({
-          secretId: secret.id,
-          version: nextVersion,
-          material: prepared.material,
-          valueSha256: prepared.valueSha256,
-          fingerprintSha256: prepared.fingerprintSha256 ?? prepared.valueSha256,
-          providerVersionRef: prepared.providerVersionRef ?? null,
-          status: "disabled",
-          createdByAgentId: actor?.agentId ?? null,
-          createdByUserId: actor?.userId ?? null,
-        });
-      } catch (error) {
-        if (secret.managedMode !== "external_reference" || externalValueWrite) {
-          await cleanupPreparedProviderWrite({
-            provider,
-            prepared,
-            providerConfig,
-            context: providerWriteContext,
-            mode: "archive",
-            operation: "rotate.prepare_rollback",
-          });
-        }
-        // A guarded concurrent rotation inserted the same next version first, so
-        // this insert fails the (secretId, version) unique index. The loser never
-        // reaches the compare-and-set guard below. Normalize only that one
-        // collision to the same stale conflict, so a guarded rotation always
-        // returns one fixed 409. Re-throw every other error unchanged.
-        if (
-          input.expectedLatestVersion !== undefined &&
-          isUniqueConstraintViolation(error, COMPANY_SECRET_VERSION_UNIQUE_CONSTRAINT)
-        ) {
-          throw conflict(SECRET_VERSION_STALE_CONFLICT);
-        }
-        throw error;
-      }
-
-      try {
-        return await db.transaction(async (tx) => {
-          await tx
-            .update(companySecretVersions)
-            .set({ status: "previous" })
-            .where(and(
-              eq(companySecretVersions.secretId, secret.id),
-              ne(companySecretVersions.version, nextVersion),
-            ));
-          await tx
-            .update(companySecretVersions)
-            .set({ status: "current" })
-            .where(and(
-              eq(companySecretVersions.secretId, secret.id),
-              eq(companySecretVersions.version, nextVersion),
-            ));
-
-          const updated = await tx
-            .update(companySecrets)
-            .set({
-              latestVersion: nextVersion,
-              externalRef: prepared.externalRef,
-              providerConfigId,
-              lastRotatedAt: new Date(),
-              updatedAt: new Date(),
-            })
-            .where(and(
-              eq(companySecrets.id, secret.id),
-              // The compare-and-set guard. It matches the latest version, so a
-              // concurrent rotation that already bumped it fails this predicate.
-              input.expectedLatestVersion === undefined
-                ? undefined
-                : eq(companySecrets.latestVersion, input.expectedLatestVersion),
-            ))
-            .returning()
-            .then((rows) => rows[0] ?? null);
-
-          if (!updated) {
-            // The predicate matched no row. A supplied expected version means a
-            // concurrent rotation won the race; return the stale conflict. An
-            // unguarded rotation means the secret is gone.
-            throw input.expectedLatestVersion === undefined
-              ? notFound("Secret not found")
-              : conflict(SECRET_VERSION_STALE_CONFLICT);
-          }
-          return updated;
-        });
-      } catch (error) {
-        if (secret.managedMode !== "external_reference" || externalValueWrite) {
-          const cleaned = await cleanupPreparedProviderWrite({
-            provider,
-            prepared,
-            providerConfig,
-            context: providerWriteContext,
-            mode: "archive",
-            operation: "rotate.rollback",
-          });
-          if (cleaned) {
-            await db
-              .delete(companySecretVersions)
-              .where(and(
-                eq(companySecretVersions.secretId, secret.id),
-                eq(companySecretVersions.version, nextVersion),
-              ))
-              .catch(() => undefined);
-          }
-        }
-        throw error;
-      }
+      return withAccountHomeSecretMutationLock(undefined, preCheckSecret.companyId, () =>
+        rotateUnlocked(secretId, input, actor),
+      );
     },
 
     update: async (

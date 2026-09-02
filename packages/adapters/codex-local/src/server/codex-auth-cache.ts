@@ -227,16 +227,19 @@ export async function ensureCodexAuthCacheEntryDirExclusive(
 }
 
 /**
- * Resolves a per-company lock target directory for
- * {@link withCodexAccountHomePromotionLock}. This is a directory of its own,
- * separate from the cache root {@link resolveCodexAuthCacheDir} resolves, so
- * the two locks never share a lock key and a caller that holds this lock can
- * still call {@link ensureCodexAuthCacheEntryDirExclusive} (which locks the
- * cache root) without nesting a lock inside itself.
+ * Resolves a per-company, named lock target directory under the same
+ * instance-scoped `companies/<companyId>/` tree the cache root and the
+ * promotion lock use. Two callers that pass the same `lockName` for the same
+ * `companyId` always resolve the same directory, so they share one lock; two
+ * different `lockName` values never share a lock key, so a caller that holds
+ * one of these named locks can still call {@link ensureCodexAuthCacheEntryDirExclusive}
+ * (which locks the cache root) or another named lock without nesting a lock
+ * inside itself.
  */
-function resolveCodexAuthCachePromotionLockDir(
+function resolveCodexAuthCacheNamedLockDir(
   env: NodeJS.ProcessEnv = process.env,
   companyId: string,
+  lockName: string,
 ): string {
   const safeCompanyId = toSafePathSegment(companyId, "companyId");
   const instanceRoot = resolvePaperclipInstanceRootForAdapter({
@@ -244,7 +247,7 @@ function resolveCodexAuthCachePromotionLockDir(
     instanceId: nonEmpty(env.PAPERCLIP_INSTANCE_ID) ?? undefined,
     env,
   });
-  return path.resolve(instanceRoot, "companies", safeCompanyId, "codex-auth-cache-promotion-lock");
+  return path.resolve(instanceRoot, "companies", safeCompanyId, lockName);
 }
 
 /**
@@ -272,7 +275,44 @@ export async function withCodexAccountHomePromotionLock<T>(
   companyId: string,
   fn: () => Promise<T>,
 ): Promise<T> {
-  const lockDir = resolveCodexAuthCachePromotionLockDir(env, companyId);
+  const lockDir = resolveCodexAuthCacheNamedLockDir(env, companyId, "codex-auth-cache-promotion-lock");
+  await ensurePrivateDir(lockDir);
+  return withDirectoryMergeLock(lockDir, fn, env);
+}
+
+/**
+ * Serializes one company's writes to the literal value of any
+ * `local_encrypted` company secret against the account-home cleanup's
+ * claimant scan in {@link withCodexAccountHomePromotionLock}'s caller. Only a
+ * `local_encrypted` secret can hold a literal directory path, so this is the
+ * one provider a cleanup claimant scan must trust. Without this lock, a
+ * secret create or rotation can commit its new value after the scan's last
+ * pass finds no claimant but before the cleanup deletes the directory: the
+ * scan and the write never observe each other, so the write's new value
+ * survives past a directory the delete has already removed.
+ *
+ * The secrets service holds this lock for the full duration of a
+ * `local_encrypted` secret's create or rotate call. A cleanup claimant scan
+ * holds it for the full duration of its final check-and-delete step. The two
+ * critical sections can then never interleave: a write that starts first
+ * finishes (and becomes visible to the scan) before the scan's lock-holding
+ * check runs, and a write that starts after the scan's lock-holding check
+ * finishes only commits once the scan (and any delete it decided on) is
+ * done, so it can never name a directory the delete just removed without the
+ * scan having had a chance to see it first.
+ *
+ * This is a separate lock directory from
+ * {@link withCodexAccountHomePromotionLock}'s, so a device-login promotion
+ * (which holds that lock for its whole sequence, including its own secret
+ * create) can still call into a secrets-service write that takes this lock
+ * without deadlocking on itself.
+ */
+export async function withAccountHomeSecretMutationLock<T>(
+  env: NodeJS.ProcessEnv = process.env,
+  companyId: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const lockDir = resolveCodexAuthCacheNamedLockDir(env, companyId, "codex-account-home-secret-mutation-lock");
   await ensurePrivateDir(lockDir);
   return withDirectoryMergeLock(lockDir, fn, env);
 }
