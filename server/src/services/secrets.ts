@@ -2567,6 +2567,113 @@ export function secretService(db: Db | DbTransaction) {
     }
   }
 
+  // The body of `update:` below, unchanged. Extracted to a named function so
+  // `update:` can wrap it in `withAccountHomeSecretMutationLock`, keyed by the
+  // company the pre-check read, without duplicating this whole patch
+  // sequence.
+  async function updateUnlocked(
+    secretId: string,
+    patch: {
+      name?: string;
+      key?: string;
+      status?: "active" | "disabled" | "archived" | "deleted";
+      providerConfigId?: string | null;
+      description?: string | null;
+      externalRef?: string | null;
+      providerMetadata?: Record<string, unknown> | null;
+    },
+  ) {
+    const secret = await getById(secretId);
+    if (!secret) throw notFound("Secret not found");
+    if (secret.status === "deleted") throw notFound("Secret not found");
+
+    if (patch.name && patch.name !== secret.name) {
+      const duplicate = await getByName(secret.companyId, patch.name);
+      if (duplicate && duplicate.id !== secret.id) {
+        throw conflict(`Secret already exists: ${patch.name}`);
+      }
+    }
+    const nextKey = patch.key ? normalizeSecretKey(patch.key) : secret.key;
+    if (!nextKey) throw unprocessable("Secret key is required");
+    if (nextKey !== secret.key) {
+      const duplicateKey = await db
+        .select()
+        .from(companySecrets)
+        .where(and(
+          eq(companySecrets.companyId, secret.companyId),
+          eq(companySecrets.scope, "company"),
+          eq(companySecrets.key, nextKey),
+          ne(companySecrets.status, "deleted"),
+        ))
+        .then((rows) => rows[0] ?? null);
+      if (duplicateKey && duplicateKey.id !== secret.id) {
+        throw conflict(`Secret key already exists: ${nextKey}`);
+      }
+    }
+    const deleting = patch.status === "deleted";
+    if (deleting && secret.managedMode === "paperclip_managed") {
+      throw unprocessable("Managed secrets must be deleted through DELETE /secrets/:id");
+    }
+    if (secret.managedMode !== "external_reference" && patch.externalRef !== undefined) {
+      throw unprocessable("Managed secrets cannot override externalRef");
+    }
+    if (
+      secret.managedMode === "external_reference" &&
+      patch.externalRef !== undefined &&
+      patch.externalRef !== secret.externalRef
+    ) {
+      throw unprocessable(
+        "External reference secrets cannot be retargeted through generic update",
+      );
+    }
+    if (
+      secret.managedMode === "external_reference" &&
+      patch.providerConfigId !== undefined &&
+      patch.providerConfigId !== secret.providerConfigId
+    ) {
+      throw unprocessable(
+        "External reference secrets cannot change provider vault through generic update",
+      );
+    }
+    if (
+      secret.managedMode === "paperclip_managed" &&
+      patch.providerConfigId !== undefined &&
+      patch.providerConfigId !== secret.providerConfigId
+    ) {
+      throw unprocessable(
+        "Managed secrets cannot change provider vault through PATCH; use rotate() to migrate to a new vault",
+      );
+    }
+    if (patch.providerConfigId !== undefined) {
+      await assertProviderConfigForSecret(
+        secret.companyId,
+        secret.provider as SecretProvider,
+        patch.providerConfigId,
+      );
+    }
+
+    return db
+      .update(companySecrets)
+      .set({
+        key: deleting ? `${secret.key}__deleted__${secret.id}` : nextKey,
+        name: deleting ? `${secret.name}__deleted__${secret.id}` : patch.name ?? secret.name,
+        status: patch.status ?? secret.status,
+        providerConfigId:
+          patch.providerConfigId === undefined ? secret.providerConfigId : patch.providerConfigId,
+        description:
+          patch.description === undefined ? secret.description : patch.description,
+        externalRef:
+          patch.externalRef === undefined ? secret.externalRef : patch.externalRef,
+        providerMetadata:
+          patch.providerMetadata === undefined ? secret.providerMetadata : patch.providerMetadata,
+        deletedAt: deleting ? new Date() : secret.deletedAt,
+        updatedAt: new Date(),
+      })
+      .where(eq(companySecrets.id, secret.id))
+      .returning()
+      .then((rows) => rows[0] ?? null);
+  }
+
   function collectTargetIds(
     bindings: Array<typeof companySecretBindings.$inferSelect>,
     targetType: SecretBindingTargetType,
@@ -3215,7 +3322,27 @@ export function secretService(db: Db | DbTransaction) {
     return { secretId: existing.id, latestVersion: existing.latestVersion };
   }
 
+  // A delete can stop the generated account-home secret from resolving to
+  // the value a device-login promotion already validated, the same way a
+  // rename, an archive, or a disable can (see `update:`'s comment). Run every
+  // delete inside `withAccountHomeSecretMutationLock`, keyed by the company a
+  // pre-check read, so a delete can never land in the gap between the
+  // promotion's terminal-commit re-check and the commit it guards.
+  // `removeSecretUnlocked` re-reads the secret under the lock, so a delete
+  // that lost a race between the pre-check and the lock still sees current
+  // state, not the pre-check's stale read.
   async function removeSecretInternal(secretId: string) {
+    const preCheckSecret = await getById(secretId);
+    if (!preCheckSecret) return null;
+    return withAccountHomeSecretMutationLock(undefined, preCheckSecret.companyId, () =>
+      removeSecretUnlocked(secretId),
+    );
+  }
+
+  // The body of `removeSecretInternal` above, unchanged. Extracted to a named
+  // function so that wrapper can hold the lock across this whole delete
+  // sequence without duplicating it.
+  async function removeSecretUnlocked(secretId: string) {
     const secret = await getById(secretId);
     if (!secret) return null;
     const versionRow = await getSecretVersion(secret.id, secret.latestVersion);
@@ -4374,9 +4501,14 @@ export function secretService(db: Db | DbTransaction) {
     resolveSecretValueForSandboxCleanup,
     resolveSecretValueForDeviceLoginCheck,
 
-    // Only a `local_encrypted` secret can hold a literal directory path, so
-    // only that provider's create runs inside `withAccountHomeSecretMutationLock`.
-    // Every other provider's create runs unlocked, unchanged.
+    // A plain string value can equal a Codex account-home path regardless of
+    // which provider stores it: an AWS Secrets Manager-backed secret (or any
+    // other provider) resolves to the same literal string a `local_encrypted`
+    // secret would. So every provider's create runs inside
+    // `withAccountHomeSecretMutationLock`, not only `local_encrypted`'s. This
+    // closes the account-home cleanup race for every provider: a create can no
+    // longer commit a value between the cleanup's final claimant scan and its
+    // delete just because it named a provider the old check treated as safe.
     create: async (
       companyId: string,
       input: {
@@ -4393,14 +4525,14 @@ export function secretService(db: Db | DbTransaction) {
       },
       actor?: { userId?: string | null; agentId?: string | null },
     ) => {
-      if (input.provider !== "local_encrypted") {
-        return createSecretUnlocked(companyId, input, actor);
-      }
       return withAccountHomeSecretMutationLock(undefined, companyId, async () => {
         // A queued create can win the lock after an account-home cleanup
         // already removed the directory this value names. Check the
         // directory's existence inside the same lock, right before the
         // write, so that order fails instead of committing a dangling path.
+        // `assertAccountHomeCacheDirStillValid` is a no-op for a value that is
+        // not under the account-home cache root, so this never rejects an
+        // unrelated secret write.
         if (input.value) {
           await assertAccountHomeCacheDirStillValid(undefined, companyId, input.value);
         }
@@ -4408,12 +4540,13 @@ export function secretService(db: Db | DbTransaction) {
       });
     },
 
-    // A pre-check reads the secret to find its provider and company. Only a
-    // `local_encrypted` secret's rotate then runs inside
-    // `withAccountHomeSecretMutationLock`; every other provider's rotate runs
-    // unlocked, unchanged. `rotateUnlocked` re-reads the secret under the lock,
-    // so a rotation that lost a race between the pre-check and the lock still
-    // sees current state, not the pre-check's stale read.
+    // Same reasoning as `create:` above: a rotate's new value can equal a
+    // Codex account-home path under any provider, so every provider's rotate
+    // runs inside `withAccountHomeSecretMutationLock`, not only
+    // `local_encrypted`'s. The pre-check reads the secret only to find its
+    // company for the lock; `rotateUnlocked` re-reads the secret under the
+    // lock, so a rotation that lost a race between the pre-check and the lock
+    // still sees current state, not the pre-check's stale read.
     rotate: async (
       secretId: string,
       input: {
@@ -4427,9 +4560,6 @@ export function secretService(db: Db | DbTransaction) {
     ) => {
       const preCheckSecret = await getById(secretId);
       if (!preCheckSecret) throw notFound("Secret not found");
-      if (preCheckSecret.provider !== "local_encrypted") {
-        return rotateUnlocked(secretId, input, actor);
-      }
       return withAccountHomeSecretMutationLock(undefined, preCheckSecret.companyId, async () => {
         // Same reasoning as `create:` above: check the new value's directory
         // inside the same lock the write commits under, so a rotate queued
@@ -4442,6 +4572,18 @@ export function secretService(db: Db | DbTransaction) {
       });
     },
 
+    // A patch can rename a secret (`patch.name`) or move it out of the
+    // `active` status (archive, disable, or a soft delete for an
+    // `external_reference` secret) — any of which can stop the generated
+    // account-home secret from resolving to the value a device-login
+    // promotion already validated. Run every update inside
+    // `withAccountHomeSecretMutationLock`, the same lock the promotion's
+    // terminal-commit re-check holds across its own resolve-and-commit
+    // section, so a rename, an archive, a disable, or a soft delete can never
+    // land in the gap between that re-check and the commit it guards: it
+    // either finishes (and the re-check observes it and rejects) before that
+    // section acquires the lock, or it waits for that section to finish
+    // first.
     update: async (
       secretId: string,
       patch: {
@@ -4454,95 +4596,11 @@ export function secretService(db: Db | DbTransaction) {
         providerMetadata?: Record<string, unknown> | null;
       },
     ) => {
-      const secret = await getById(secretId);
-      if (!secret) throw notFound("Secret not found");
-      if (secret.status === "deleted") throw notFound("Secret not found");
-
-      if (patch.name && patch.name !== secret.name) {
-        const duplicate = await getByName(secret.companyId, patch.name);
-        if (duplicate && duplicate.id !== secret.id) {
-          throw conflict(`Secret already exists: ${patch.name}`);
-        }
-      }
-      const nextKey = patch.key ? normalizeSecretKey(patch.key) : secret.key;
-      if (!nextKey) throw unprocessable("Secret key is required");
-      if (nextKey !== secret.key) {
-        const duplicateKey = await db
-          .select()
-          .from(companySecrets)
-          .where(and(
-            eq(companySecrets.companyId, secret.companyId),
-            eq(companySecrets.scope, "company"),
-            eq(companySecrets.key, nextKey),
-            ne(companySecrets.status, "deleted"),
-          ))
-          .then((rows) => rows[0] ?? null);
-        if (duplicateKey && duplicateKey.id !== secret.id) {
-          throw conflict(`Secret key already exists: ${nextKey}`);
-        }
-      }
-      const deleting = patch.status === "deleted";
-      if (deleting && secret.managedMode === "paperclip_managed") {
-        throw unprocessable("Managed secrets must be deleted through DELETE /secrets/:id");
-      }
-      if (secret.managedMode !== "external_reference" && patch.externalRef !== undefined) {
-        throw unprocessable("Managed secrets cannot override externalRef");
-      }
-      if (
-        secret.managedMode === "external_reference" &&
-        patch.externalRef !== undefined &&
-        patch.externalRef !== secret.externalRef
-      ) {
-        throw unprocessable(
-          "External reference secrets cannot be retargeted through generic update",
-        );
-      }
-      if (
-        secret.managedMode === "external_reference" &&
-        patch.providerConfigId !== undefined &&
-        patch.providerConfigId !== secret.providerConfigId
-      ) {
-        throw unprocessable(
-          "External reference secrets cannot change provider vault through generic update",
-        );
-      }
-      if (
-        secret.managedMode === "paperclip_managed" &&
-        patch.providerConfigId !== undefined &&
-        patch.providerConfigId !== secret.providerConfigId
-      ) {
-        throw unprocessable(
-          "Managed secrets cannot change provider vault through PATCH; use rotate() to migrate to a new vault",
-        );
-      }
-      if (patch.providerConfigId !== undefined) {
-        await assertProviderConfigForSecret(
-          secret.companyId,
-          secret.provider as SecretProvider,
-          patch.providerConfigId,
-        );
-      }
-
-      return db
-        .update(companySecrets)
-        .set({
-          key: deleting ? `${secret.key}__deleted__${secret.id}` : nextKey,
-          name: deleting ? `${secret.name}__deleted__${secret.id}` : patch.name ?? secret.name,
-          status: patch.status ?? secret.status,
-          providerConfigId:
-            patch.providerConfigId === undefined ? secret.providerConfigId : patch.providerConfigId,
-          description:
-            patch.description === undefined ? secret.description : patch.description,
-          externalRef:
-            patch.externalRef === undefined ? secret.externalRef : patch.externalRef,
-          providerMetadata:
-            patch.providerMetadata === undefined ? secret.providerMetadata : patch.providerMetadata,
-          deletedAt: deleting ? new Date() : secret.deletedAt,
-          updatedAt: new Date(),
-        })
-        .where(eq(companySecrets.id, secret.id))
-        .returning()
-        .then((rows) => rows[0] ?? null);
+      const preCheckSecret = await getById(secretId);
+      if (!preCheckSecret) throw notFound("Secret not found");
+      return withAccountHomeSecretMutationLock(undefined, preCheckSecret.companyId, () =>
+        updateUnlocked(secretId, patch),
+      );
     },
 
     createBinding: async (input: {
