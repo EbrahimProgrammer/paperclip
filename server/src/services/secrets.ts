@@ -73,7 +73,17 @@ import { logActivity } from "./activity-log.js";
 // claimant" but has not yet deleted the directory. See
 // `withAccountHomeSecretMutationLock`'s own comment in the codex-local
 // adapter for the full race this closes.
-import { withAccountHomeSecretMutationLock } from "@paperclipai/adapter-codex-local/server";
+//
+// The lock alone still lets a queued write commit a directory the cleanup
+// already removed, once the cleanup's own lock-holding section runs first and
+// frees the lock. `assertAccountHomeCacheDirStillValid` closes that window: a
+// create or a rotate calls it inside the same lock, right before it commits,
+// so a value that named a directory the cleanup just deleted fails instead of
+// writing a secret that points at nothing.
+import {
+  assertAccountHomeCacheDirStillValid,
+  withAccountHomeSecretMutationLock,
+} from "@paperclipai/adapter-codex-local/server";
 
 const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const AGENT_ACCESS_CONFIG_PATH_PREFIX = "access.";
@@ -4382,9 +4392,16 @@ export function secretService(db: Db | DbTransaction) {
       if (input.provider !== "local_encrypted") {
         return createSecretUnlocked(companyId, input, actor);
       }
-      return withAccountHomeSecretMutationLock(undefined, companyId, () =>
-        createSecretUnlocked(companyId, input, actor),
-      );
+      return withAccountHomeSecretMutationLock(undefined, companyId, async () => {
+        // A queued create can win the lock after an account-home cleanup
+        // already removed the directory this value names. Check the
+        // directory's existence inside the same lock, right before the
+        // write, so that order fails instead of committing a dangling path.
+        if (input.value) {
+          await assertAccountHomeCacheDirStillValid(undefined, companyId, input.value);
+        }
+        return createSecretUnlocked(companyId, input, actor);
+      });
     },
 
     // A pre-check reads the secret to find its provider and company. Only a
@@ -4409,9 +4426,16 @@ export function secretService(db: Db | DbTransaction) {
       if (preCheckSecret.provider !== "local_encrypted") {
         return rotateUnlocked(secretId, input, actor);
       }
-      return withAccountHomeSecretMutationLock(undefined, preCheckSecret.companyId, () =>
-        rotateUnlocked(secretId, input, actor),
-      );
+      return withAccountHomeSecretMutationLock(undefined, preCheckSecret.companyId, async () => {
+        // Same reasoning as `create:` above: check the new value's directory
+        // inside the same lock the write commits under, so a rotate queued
+        // behind an account-home cleanup cannot commit a directory the
+        // cleanup already removed.
+        if (input.value) {
+          await assertAccountHomeCacheDirStillValid(undefined, preCheckSecret.companyId, input.value);
+        }
+        return rotateUnlocked(secretId, input, actor);
+      });
     },
 
     update: async (

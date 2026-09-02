@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync, rmSync } from "node:fs";
+import { mkdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { and, eq } from "drizzle-orm";
+import { resolveCodexAuthCacheDir, withAccountHomeSecretMutationLock } from "@paperclipai/adapter-codex-local/server";
 import {
   activityLog,
   agents,
@@ -86,6 +88,16 @@ describeEmbeddedPostgres("secretService", () => {
       updatedAt: new Date(),
     });
     return companyId;
+  }
+
+  // Creates a real directory under this company's Codex account-home cache
+  // root, so a test can prove the write-time directory-validity check reads
+  // an actual filesystem entry, the same way the production cleanup and the
+  // production secret write do.
+  async function makeAccountHomeDir(companyId: string, accountHandle: string): Promise<string> {
+    const accountHomeDir = path.join(resolveCodexAuthCacheDir(undefined, companyId), accountHandle);
+    await mkdir(accountHomeDir, { recursive: true });
+    return accountHomeDir;
   }
 
   async function seedCompanyMember(
@@ -454,6 +466,94 @@ describeEmbeddedPostgres("secretService", () => {
     releaseRotateWrite();
     await Promise.all([rotateCall, createCall]);
     expect(events).toEqual(["rotate-provider-enter", "rotate-provider-exit", "create-provider-enter"]);
+  });
+
+  it("fails a queued local_encrypted create when an account-home cleanup removes its directory first", async () => {
+    // The mutation lock alone stops a write and an account-home cleanup's
+    // check-and-delete from interleaving; it does not stop them from running
+    // in either order. When the cleanup wins the lock first, deletes the
+    // directory, and releases the lock, a create that was only queued behind
+    // it must not go on to commit that now-deleted directory as a secret
+    // value. It must fail instead.
+    const companyId = await seedCompany();
+    const svc = secretService(db);
+    const accountHomeDir = await makeAccountHomeDir(companyId, "acct-queued-create");
+
+    const events: string[] = [];
+    let releaseCleanup!: () => void;
+    const cleanupGate = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const cleanupCall = withAccountHomeSecretMutationLock(undefined, companyId, async () => {
+      events.push("cleanup-enter");
+      await cleanupGate;
+      await rm(accountHomeDir, { recursive: true, force: true });
+      events.push("cleanup-exit");
+    });
+    // Give the cleanup a chance to acquire the lock before the create starts
+    // racing for the same lock.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const createCall = svc.create(companyId, {
+      name: `account-home-${randomUUID()}`,
+      provider: "local_encrypted",
+      value: accountHomeDir,
+    });
+    // The create must stay queued behind the held lock.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(events).toEqual(["cleanup-enter"]);
+
+    releaseCleanup();
+    await cleanupCall;
+    await expect(createCall).rejects.toThrow(/no longer exists/);
+  });
+
+  it("fails a queued local_encrypted rotate when an account-home cleanup removes its directory first", async () => {
+    // Same race, the other write path: a rotate that would commit a
+    // now-deleted account-home directory must fail the same way a create
+    // does.
+    const companyId = await seedCompany();
+    const svc = secretService(db);
+    const existing = await svc.create(companyId, {
+      name: `hand-named-${randomUUID()}`,
+      provider: "local_encrypted",
+      value: "/some/unrelated/placeholder/value",
+    });
+    const accountHomeDir = await makeAccountHomeDir(companyId, "acct-queued-rotate");
+
+    const events: string[] = [];
+    let releaseCleanup!: () => void;
+    const cleanupGate = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const cleanupCall = withAccountHomeSecretMutationLock(undefined, companyId, async () => {
+      events.push("cleanup-enter");
+      await cleanupGate;
+      await rm(accountHomeDir, { recursive: true, force: true });
+      events.push("cleanup-exit");
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const rotateCall = svc.rotate(existing.id, { value: accountHomeDir });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(events).toEqual(["cleanup-enter"]);
+
+    releaseCleanup();
+    await cleanupCall;
+    await expect(rotateCall).rejects.toThrow(/no longer exists/);
+  });
+
+  it("commits a local_encrypted secret naming an account-home directory that still exists", async () => {
+    // A regression guard for the check above: a create whose value names a
+    // directory that is still present must keep succeeding, unblocked.
+    const companyId = await seedCompany();
+    const svc = secretService(db);
+    const accountHomeDir = await makeAccountHomeDir(companyId, "acct-still-present");
+
+    const created = await svc.create(companyId, {
+      name: `account-home-${randomUUID()}`,
+      provider: "local_encrypted",
+      value: accountHomeDir,
+    });
+    expect(created.status).toBe("active");
   });
 
   it("validates the access namespace as agent-only with env-style aliases", async () => {

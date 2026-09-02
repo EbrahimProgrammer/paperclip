@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  assertAccountHomeCacheDirStillValid,
   clearCodexAuthCache,
   clearCodexAuthCacheEntry,
   ensureCodexAuthCacheEntryDir,
@@ -514,6 +515,49 @@ describe("codex auth cache store", () => {
       });
 
       expect(events).toEqual(["promotion-enter", "mutation-enter", "mutation-exit", "promotion-exit"]);
+    });
+  });
+
+  describe("Phase 8: account-home directory validity before a secret write commits", () => {
+    it("resolves for a value naming a directory that still exists under the cache root", async () => {
+      const home = await makeInstanceRoot();
+      const env = envFor(home);
+      const companyId = "company-still-exists";
+      const entryPath = await ensureCodexAuthCacheEntryDir(env, "acct-still-exists", companyId);
+      const accountHomeDir = path.dirname(entryPath);
+
+      await expect(
+        assertAccountHomeCacheDirStillValid(env, companyId, accountHomeDir),
+      ).resolves.toBeUndefined();
+    });
+
+    it("rejects a value naming a directory under the cache root that no longer exists", async () => {
+      // This is the shape an account-home cleanup leaves behind: a value that
+      // once named a real directory, now removed. A create or a rotate that
+      // is about to commit this exact value must fail instead of writing a
+      // secret that points at nothing.
+      const home = await makeInstanceRoot();
+      const env = envFor(home);
+      const companyId = "company-removed";
+      const entryPath = await ensureCodexAuthCacheEntryDir(env, "acct-removed", companyId);
+      const accountHomeDir = path.dirname(entryPath);
+      await rm(accountHomeDir, { recursive: true, force: true });
+
+      await expect(assertAccountHomeCacheDirStillValid(env, companyId, accountHomeDir)).rejects.toThrow(
+        /no longer exists/,
+      );
+    });
+
+    it("leaves a value alone when it does not sit under this company's cache root", async () => {
+      // Most `local_encrypted` secret values (an API key, a token, a
+      // hand-typed string) never sit under the cache root, so this check must
+      // never reject a write that only happens to name a missing path.
+      const home = await makeInstanceRoot();
+      const env = envFor(home);
+
+      await expect(
+        assertAccountHomeCacheDirStillValid(env, "company-unrelated", "/some/unrelated/missing/path"),
+      ).resolves.toBeUndefined();
     });
   });
 });

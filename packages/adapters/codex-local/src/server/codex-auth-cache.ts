@@ -318,6 +318,47 @@ export async function withAccountHomeSecretMutationLock<T>(
 }
 
 /**
+ * Confirms a `local_encrypted` secret value that names a directory under this
+ * company's Codex account-home cache root still exists on disk. Call this
+ * inside {@link withAccountHomeSecretMutationLock}, before a create or a
+ * rotate commits the value.
+ *
+ * The lock alone stops a write and the account-home cleanup's
+ * check-and-delete from interleaving; it does not stop them from running in
+ * either order. When the cleanup's check-and-delete runs first — it finds no
+ * secret names the directory, because this write had not committed yet, and
+ * removes the directory — a write that was only queued behind the lock still
+ * goes on, once the lock frees, to commit the very directory the cleanup
+ * just removed. That would leave an active secret naming a directory that
+ * does not exist. This check closes that window: a write whose value would
+ * name a directory the cleanup already removed fails instead of committing.
+ *
+ * A value outside this company's cache root is left alone. Only a value
+ * under the cache root can ever be an account-home directory, so this never
+ * rejects an unrelated `local_encrypted` secret write, such as an API key or
+ * a hand-typed token.
+ */
+export async function assertAccountHomeCacheDirStillValid(
+  env: NodeJS.ProcessEnv = process.env,
+  companyId: string,
+  value: string,
+): Promise<void> {
+  const cacheRoot = resolveCodexAuthCacheDir(env, companyId);
+  if (!value.startsWith(cacheRoot + path.sep)) return;
+  const exists = await lstat(value)
+    .then(() => true)
+    .catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return false;
+      throw error;
+    });
+  if (!exists) {
+    throw new Error(
+      "codex auth cache: account-home directory no longer exists; refusing to write a secret that names it",
+    );
+  }
+}
+
+/**
  * Reads the usable subscription `account_id` from an `auth.json` payload. Returns
  * `null` for an absent, unusable, or api-key credential (no subscription
  * identity). This mirrors `parseAuth` in `codex-auth-merge-decision.cjs`; keep

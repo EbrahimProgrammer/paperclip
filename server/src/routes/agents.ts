@@ -275,6 +275,13 @@ function readRunIssueId(context: Record<string, unknown> | null) {
 // bound agent reads the wrong (or a missing) credential home. Fails loud on
 // a mismatch, so the login fails instead of silently pointing agents at the
 // wrong home.
+//
+// Each caller must run this function inside `withAccountHomeSecretMutationLock`,
+// the same lock a `local_encrypted` secret rotate holds for its whole write,
+// and must return right after this function resolves with no `await` in
+// between. Otherwise a rotate could commit a new value in the gap between
+// this check and the caller reporting success, so the login would report
+// success for a value that no longer names the account's own home.
 async function assertAccountHomeSecretMatches(
   secretsSvc: { resolveSecretValueForDeviceLoginCheck: (companyId: string, secretId: string, context: { configPath: string }) => Promise<string> },
   companyId: string,
@@ -746,7 +753,20 @@ export function agentRoutes(
               // A same-name secret already exists. Confirm it still names this
               // account's own home before treating a repeat login as a success:
               // the name alone is not proof of a match.
-              await assertAccountHomeSecretMatches(secretsSvc, context.companyId, existingSecret, secretName, accountHomeDir);
+              //
+              // Run the check inside the same lock a `local_encrypted` secret
+              // rotate holds for its whole write. Without the lock, a board
+              // user could rotate this exact secret to a different value in
+              // the gap between the check and the `return` below, so the
+              // login would report success for a value that no longer names
+              // the account's own home. Under the shared lock, a rotate
+              // either finishes (and this check reads its new value) before
+              // this section starts, or it waits for this section — which
+              // returns synchronously right after the check — to finish
+              // first. Either way, no rotate can land inside that gap.
+              await withAccountHomeSecretMutationLock(undefined, context.companyId, () =>
+                assertAccountHomeSecretMatches(secretsSvc, context.companyId, existingSecret, secretName, accountHomeDir),
+              );
               return;
             }
             try {
@@ -772,7 +792,14 @@ export function agentRoutes(
                     `device-login credential promotion rejected: the ${secretName} secret conflict could not be resolved`,
                   );
                 }
-                await assertAccountHomeSecretMatches(secretsSvc, context.companyId, winningSecret, secretName, accountHomeDir);
+                // Same lock and the same reasoning as the pre-existing-secret
+                // check above: hold `withAccountHomeSecretMutationLock` across
+                // the check and the `return`, so a rotate of the winning
+                // secret cannot land in the gap and leave this login
+                // reporting success for a stale value.
+                await withAccountHomeSecretMutationLock(undefined, context.companyId, () =>
+                  assertAccountHomeSecretMatches(secretsSvc, context.companyId, winningSecret, secretName, accountHomeDir),
+                );
                 return;
               }
               // The account home write failed for a reason other than a naming

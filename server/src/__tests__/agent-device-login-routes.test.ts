@@ -4,6 +4,7 @@ import { lstat, mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withAccountHomeSecretMutationLock } from "@paperclipai/adapter-codex-local/server";
 import { AdapterAuthSessionConflictError } from "../services/device-login-service.js";
 import type {
   AdapterAuthSessionRow,
@@ -921,6 +922,54 @@ describe("adapter device-login routes", () => {
       "existing-secret",
       expect.objectContaining({ configPath: "secrets.CODEX_HOME_acct-default" }),
     );
+  });
+
+  it("holds the account-home secret mutation lock while checking a pre-existing secret's value", async () => {
+    // A `local_encrypted` secret rotate takes `withAccountHomeSecretMutationLock`
+    // for the whole of its write. The pre-existing-secret check must run
+    // inside the same lock and return right after: otherwise a rotate could
+    // commit a new value in the gap between the check and the login
+    // reporting success, and the login would report success for a value
+    // that no longer names the account's own home. This proves the check
+    // waits for a lock held elsewhere, and only reads the secret's value
+    // once that lock frees.
+    const accountHomeDir = "/tmp/paperclip-codex-account-home/acct-default";
+    mockSecretService.getByName.mockResolvedValue({ id: "existing-secret" });
+    mockSecretService.resolveSecretValueForDeviceLoginCheck.mockResolvedValue(accountHomeDir);
+    mockDeviceLoginPromotion.mockResolvedValueOnce({
+      outcome: "kept",
+      accountId: "acct-default",
+      accountHomeDir,
+    });
+
+    let releaseHeldLock!: () => void;
+    const heldLockGate = new Promise<void>((resolve) => {
+      releaseHeldLock = resolve;
+    });
+    const lockHolder = withAccountHomeSecretMutationLock(undefined, COMPANY_1, () => heldLockGate);
+    // Give the held lock a chance to actually acquire before the login
+    // starts racing for the same lock.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const app = await createApp();
+    const start = await request(app)
+      .post(loginPath(COMPANY_1))
+      .send({ environmentId: SANDBOX_ENV_1 });
+    expect(start.status, JSON.stringify(start.body)).toBe(201);
+    const sessionId = start.body.sessionId as string;
+    harness.releaseGate();
+
+    // The login's check must stay blocked behind the held lock.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(mockSecretService.resolveSecretValueForDeviceLoginCheck).not.toHaveBeenCalled();
+
+    releaseHeldLock();
+    await lockHolder;
+    await vi.waitFor(async () => {
+      const status = await request(app).get(`${loginPath(COMPANY_1)}/${sessionId}`);
+      expect(status.body.status).toBe("authenticated");
+    });
+    expect(mockSecretService.resolveSecretValueForDeviceLoginCheck).toHaveBeenCalled();
   });
 
   it("fails closed when a pre-existing secret names a different account home", async () => {
