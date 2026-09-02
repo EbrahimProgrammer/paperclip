@@ -26,6 +26,21 @@ const AMBIENT_EXTERNAL_STATE_KEYS = [
 ] as const;
 const PROVIDER_SECRET_KEY = /^(?:OPENAI|ANTHROPIC|OPENROUTER|DAYTONA)(?:_|$)/;
 
+export function runnerE2EServerControlPaths(temporaryRoot: string) {
+  const controlDirectory = path.join(temporaryRoot, "control");
+  return {
+    controlDirectory,
+    restartRequestPath: path.join(
+      controlDirectory,
+      "server-restart.request.json",
+    ),
+    restartAcknowledgementPath: path.join(
+      controlDirectory,
+      "server-restart.ack.json",
+    ),
+  };
+}
+
 /**
  * Local native cells use the debug binary produced by build:runner-binaries.
  * Preserve an explicit override for release builds and developer workflows.

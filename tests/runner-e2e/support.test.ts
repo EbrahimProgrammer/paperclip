@@ -11,6 +11,7 @@ import {
   assertIsolatedServerEnvironment,
   buildPaperclipServerEnvironment,
   resolvePaperclipRunnerBinaryForHarness,
+  runnerE2EServerControlPaths,
 } from "./harness-env.js";
 import { runnerExecutionById } from "./catalog.js";
 import { assertEmbeddedDatabaseIsolation } from "./instance-isolation.js";
@@ -354,6 +355,22 @@ describe("runner E2E failure policy", () => {
 });
 
 describe("runner E2E server isolation", () => {
+  it("shares restart control files beneath the isolated temporary root", () => {
+    expect(runnerE2EServerControlPaths("/tmp/cell")).toEqual({
+      controlDirectory: path.join("/tmp/cell", "control"),
+      restartRequestPath: path.join(
+        "/tmp/cell",
+        "control",
+        "server-restart.request.json",
+      ),
+      restartAcknowledgementPath: path.join(
+        "/tmp/cell",
+        "control",
+        "server-restart.ack.json",
+      ),
+    });
+  });
+
   it("strips database and paid-provider credentials from the Paperclip process", () => {
     const env = buildPaperclipServerEnvironment(
       {

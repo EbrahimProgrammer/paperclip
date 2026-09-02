@@ -6,6 +6,7 @@ import { RunnerApi, pollUntil } from "./api.js";
 import { buildRuntimeUsage, summarizeExecutionBilling } from "./billing.js";
 import { runnerExecutionById } from "./catalog.js";
 import { classifyFailure } from "./failure-classifier.js";
+import { runnerE2EServerControlPaths } from "./harness-env.js";
 import { setupLiveFixtures, type LiveFixtureValues } from "./live-fixtures.js";
 import { evaluateMatcher, type MatcherResult } from "./matchers.js";
 import {
@@ -166,15 +167,11 @@ async function restartIsolatedPaperclipServer(input: {
   requestId: string;
   deadlineAt: number;
 }): Promise<void> {
-  const controlDirectory = path.join(privateRoot!, "control");
-  const requestPath = path.join(
+  const {
     controlDirectory,
-    "server-restart.request.json",
-  );
-  const acknowledgementPath = path.join(
-    controlDirectory,
-    "server-restart.ack.json",
-  );
+    restartRequestPath: requestPath,
+    restartAcknowledgementPath: acknowledgementPath,
+  } = runnerE2EServerControlPaths(temporaryRoot!);
   await mkdir(controlDirectory, { recursive: true });
   const temporaryRequestPath = `${requestPath}.${process.pid}.${input.requestId}.tmp`;
   await writeFile(
@@ -237,10 +234,11 @@ const executionIds = (() => {
 })();
 const executions = executionIds.map(runnerExecutionById);
 const attempt = Number(process.env.PAPERCLIP_RUNNER_E2E_ATTEMPT ?? "1");
+const temporaryRoot = process.env.PAPERCLIP_RUNNER_E2E_TEMP_ROOT;
 const privateRoot = process.env.PAPERCLIP_RUNNER_E2E_PRIVATE_DIR;
 const workspacePath = process.env.PAPERCLIP_RUNNER_E2E_WORKSPACE;
-if (!privateRoot || !workspacePath)
-  throw new Error("Runner E2E private/workspace paths are required");
+if (!temporaryRoot || !privateRoot || !workspacePath)
+  throw new Error("Runner E2E temporary/private/workspace paths are required");
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -1424,8 +1422,7 @@ for (const execution of executions) {
           )?.[1] ??
           /Using fallback workspace "([^"]+)"/.exec(runLogContent)?.[1];
         const cwd = String(workspaceContext.cwd ?? fallbackWorkspace ?? "");
-        const isolatedRoot = process.env.PAPERCLIP_RUNNER_E2E_TEMP_ROOT ?? "";
-        if (!isolatedRoot || !cwd.startsWith(`${isolatedRoot}/`)) {
+        if (!cwd.startsWith(`${temporaryRoot}/`)) {
           invariantFailures.push(
             `local run workspace escaped the isolated root: ${cwd}`,
           );
