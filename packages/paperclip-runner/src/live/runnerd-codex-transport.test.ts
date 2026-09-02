@@ -894,7 +894,12 @@ it("binds an immediately failed durable turn before exposing its terminal", asyn
     });
   } finally {
     await session.close();
-    await rm(stateDirectory, { recursive: true, force: true });
+    await rm(stateDirectory, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    });
   }
 }, 30_000);
 
