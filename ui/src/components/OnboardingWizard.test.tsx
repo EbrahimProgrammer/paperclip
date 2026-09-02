@@ -980,6 +980,65 @@ describe("OnboardingWizard restore-gate (stale localStorage across accounts)", (
       root.unmount();
     });
   });
+  it("does not unmount a restored wizard during a later company-list refetch", async () => {
+    // The ownership request is a one-time mount gate. Creating an organization
+    // invalidates the same list afterwards; if every refetch re-applies the
+    // gate, the inner wizard is torn down mid-flow and remounts from its old
+    // draft instead of advancing.
+    window.localStorage.setItem(
+      ONBOARDING_STORAGE_KEY,
+      JSON.stringify({
+        step: 3,
+        companyName: "Saved Co",
+        agentName: "Ops Lead",
+        createdCompanyId: "c1",
+      }),
+    );
+    const ownedCompanies = [{ id: "c1", name: "Saved Co", issuePrefix: "SC" }];
+    let resolveRefetch: (companies: typeof ownedCompanies) => void = () => {};
+    mockCompaniesApi.list
+      .mockResolvedValueOnce(ownedCompanies)
+      .mockReturnValueOnce(
+        new Promise<typeof ownedCompanies>((resolve) => {
+          resolveRefetch = resolve;
+        }),
+      );
+
+    const { root, queryClient } = render();
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <OnboardingWizard />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+
+    expect(document.body.textContent).toContain("Create your first agent");
+    const nameInput = document.body.querySelector(
+      "#onboarding-agent-name",
+    ) as HTMLInputElement;
+    setControlledValue(nameInput, "Edited Lead");
+    await flushReact();
+
+    await act(async () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
+    });
+    await flushReact();
+
+    expect(document.body.textContent).toContain("Create your first agent");
+    expect(
+      (document.body.querySelector("#onboarding-agent-name") as HTMLInputElement).value,
+    ).toBe("Edited Lead");
+
+    await act(async () => {
+      resolveRefetch(ownedCompanies);
+    });
+    await flushReact();
+    await act(async () => {
+      root.unmount();
+    });
+  });
   it("clears an unreadable draft without waiting on the company endpoint", async () => {
     // Junk is junk whoever owns what, so judging it must not queue behind a
     // request that cannot change the answer — nor issue one at all.
