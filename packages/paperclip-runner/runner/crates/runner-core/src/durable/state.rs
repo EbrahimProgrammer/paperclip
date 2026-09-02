@@ -1248,10 +1248,19 @@ fn redact_sensitive_text_values(input: &str) -> String {
                 continue;
             }
             let end = if let Some(quote) = quote {
-                bytes[value_start..]
-                    .iter()
-                    .position(|value| *value == quote)
-                    .map_or(bytes.len(), |offset| value_start + offset)
+                let mut end = value_start;
+                let mut escaped = false;
+                while end < bytes.len() {
+                    if bytes[end] == quote && !escaped {
+                        break;
+                    }
+                    escaped = bytes[end] == b'\\' && !escaped;
+                    if bytes[end] != b'\\' {
+                        escaped = false;
+                    }
+                    end += 1;
+                }
+                end
             } else if authorization_value_extends_to_line_end {
                 let mut end = value_start;
                 while end < bytes.len() && !matches!(bytes[end], b'\n' | b'\r') {
@@ -1526,6 +1535,10 @@ mod tests {
         assert_eq!(
             redact_text("login failed password=\"two word secret\" status=403"),
             "login failed password=\"[REDACTED]\" status=403"
+        );
+        assert_eq!(
+            redact_text(r#"login failed password="pa\"ss" status=403"#),
+            r#"login failed password="[REDACTED]" status=403"#
         );
         assert_eq!(
             redact_text("OPENAI_API_KEY=secret-value access_token=other-secret"),
