@@ -1,11 +1,10 @@
-import { lstat, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { toAccountHandle } from "@paperclipai/shared";
 import {
-  ensureCodexAuthCacheEntryDir,
+  ensureCodexAuthCacheEntryDirExclusive,
   readSubscriptionAccountId,
-  resolveCodexAuthCacheEntryPath,
 } from "./codex-auth-cache.js";
 import { writeCredentialSeedOrNewer } from "./codex-auth-seed-write.js";
 import { codexHomeHasUsableAuth, resolveManagedCodexHomeDir } from "./codex-home.js";
@@ -118,11 +117,16 @@ export type PromoteDeviceLoginCredentialOutcome = "promoted" | "kept" | "not_sol
  * carry `accountHomeDir`.
  *
  * `accountHomeCreated` is true only when this account's own home directory was
- * absent right before this call created it. A caller that must undo a later
+ * absent right before this call created it. The check and the creation run
+ * under one lock, so a concurrent promotion for the same account (a second
+ * login for the same Codex account) never also reports `created: true` for a
+ * directory the first call already made. A caller that must undo a later
  * failure (for example, a failed secret write) should remove the directory
- * only when `accountHomeCreated` is true. The absence of a company secret for
- * this account is not proof that this login created the directory: a user can
- * delete the secret and keep the account home, and a repeat login then reads
+ * only when `accountHomeCreated` is true, and should still re-check that no
+ * company secret now names this account's home before it deletes: the
+ * absence of a company secret at the time this call started is not proof
+ * that this login is the only login that used the directory. A user can also
+ * delete the secret and keep the account home, so a repeat login then reads
  * no secret. `accountHomeCreated` is false for every outcome that does not
  * reach the write step (`not_sole_owner`, `background_skipped`).
  */
@@ -237,17 +241,15 @@ export async function promoteDeviceLoginCredential(
   //     handle addresses exactly one home, so this write can never collide with
   //     a different identity, and a write failure here fails the whole
   //     promotion (fail loud, unlike the company default home fallback below).
-  //     Read the directory's existence before `ensureCodexAuthCacheEntryDir`
-  //     creates it, so a later caller can tell whether this exact call created
-  //     the directory or reused one that already held a working credential.
-  const accountHomeEntryPath = resolveCodexAuthCacheEntryPath(env, accountHandle, companyId);
-  const accountHomeCreated = await lstat(path.dirname(accountHomeEntryPath))
-    .then(() => false)
-    .catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return true;
-      throw error;
-    });
-  const accountHomeAuthPath = await ensureCodexAuthCacheEntryDir(env, accountHandle, companyId);
+  //     Two different logins can promote the same account at the same time
+  //     (each login owns its own promotion slot), so the absence check and the
+  //     directory creation run inside one lock: only the caller that truly
+  //     finds the directory absent gets `created: true`. A plain
+  //     check-then-create sequence here would let two concurrent callers for
+  //     the same account both see the directory as absent and both believe
+  //     they created it.
+  const { entryPath: accountHomeAuthPath, created: accountHomeCreated } =
+    await ensureCodexAuthCacheEntryDirExclusive(env, accountHandle, companyId);
   const accountHomeDir = path.dirname(accountHomeAuthPath);
   const accountHomeOutcome = await writeCredentialSeedOrNewer({
     sourceBytes: authBytes,

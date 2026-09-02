@@ -182,6 +182,50 @@ export async function ensureCodexAuthCacheEntryDir(
   return entryPath;
 }
 
+export interface EnsureCodexAuthCacheEntryDirExclusiveResult {
+  /** The entry path: `<accountHomeDir>/auth.json`. */
+  entryPath: string;
+  /** True only when this exact call found the account's own home directory
+   *  absent and created it. */
+  created: boolean;
+}
+
+/**
+ * Same as {@link ensureCodexAuthCacheEntryDir}, but the absence check and the
+ * directory creation run inside one lock keyed to the company-scoped cache
+ * root. Two different logins for the SAME Codex account can promote at the
+ * same time (each login owns its own promotion slot), so a plain
+ * check-then-create sequence lets both concurrent callers see the slot as
+ * absent and both report `created: true`. Under this lock, only the caller
+ * that truly finds the slot absent gets `created: true`; the other caller
+ * correctly reports `created: false` and so never deletes a home the first
+ * caller's login already wrote to and named with a company secret.
+ */
+export async function ensureCodexAuthCacheEntryDirExclusive(
+  env: NodeJS.ProcessEnv = process.env,
+  accountId: string,
+  companyId: string,
+): Promise<EnsureCodexAuthCacheEntryDirExclusiveResult> {
+  const cacheRoot = resolveCodexAuthCacheDir(env, companyId);
+  await ensurePrivateDir(cacheRoot);
+  return withDirectoryMergeLock(
+    cacheRoot,
+    async () => {
+      const entryPath = resolveCodexAuthCacheEntryPath(env, accountId, companyId);
+      const entryDir = path.dirname(entryPath);
+      const created = await lstat(entryDir)
+        .then(() => false)
+        .catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return true;
+          throw error;
+        });
+      await ensurePrivateDir(entryDir);
+      return { entryPath, created };
+    },
+    env,
+  );
+}
+
 /**
  * Reads the usable subscription `account_id` from an `auth.json` payload. Returns
  * `null` for an absent, unusable, or api-key credential (no subscription

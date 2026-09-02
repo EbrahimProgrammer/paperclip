@@ -72,6 +72,11 @@ const AGENT_ACCESS_CONFIG_PATH_PREFIX = "access.";
 // resolves the recorded connection secret under this id so the audit trail
 // marks the read as an orphan-sandbox teardown, not a normal environment read.
 export const SANDBOX_CLEANUP_CONSUMER_ID = "environment-sandbox-cleanup";
+// System consumer id for a device-login account-home secret check. A device
+// login resolves a pre-existing secret's value under this id, so the audit
+// trail marks the read as a same-account idempotency check, not a normal
+// runtime bind.
+export const DEVICE_LOGIN_SECRET_CHECK_CONSUMER_ID = "device-login-secret-check";
 const SENSITIVE_ENV_KEY_RE =
   /(api[-_]?key|access[-_]?token|auth(?:_?token)?|authorization|bearer|secret|passwd|password|credential|jwt|private[-_]?key|cookie|connectionstring)/i;
 const REDACTED_SENTINEL = "***REDACTED***";
@@ -1503,6 +1508,32 @@ export function secretService(db: Db | DbTransaction) {
           configPath: context.configPath,
           issueId: context.issueId ?? null,
           heartbeatRunId: context.heartbeatRunId ?? null,
+        },
+      })
+    ).value;
+  }
+
+  // Resolve a pre-existing `CODEX_HOME_<handle>` (or equivalent) secret's
+  // current value for a device-login idempotency check. A device login that
+  // finds a secret already at its expected name must compare the stored
+  // value against the account home it just resolved, not trust the name
+  // alone: a stale or foreign secret at that name would otherwise let the
+  // login report success while a bound agent reads the wrong credential
+  // home. The read is audit-only (no `bindingContext`), because the secret
+  // may carry no environment binding yet.
+  async function resolveSecretValueForDeviceLoginCheck(
+    companyId: string,
+    secretId: string,
+    context: { configPath: string },
+  ): Promise<string> {
+    return (
+      await resolveSecretValueInternal(companyId, secretId, "latest", {
+        accessContext: {
+          consumerType: "system",
+          consumerId: DEVICE_LOGIN_SECRET_CHECK_CONSUMER_ID,
+          actorType: "system",
+          actorId: null,
+          configPath: context.configPath,
         },
       })
     ).value;
@@ -3872,6 +3903,7 @@ export function secretService(db: Db | DbTransaction) {
     listAgentSecretAccess,
     resolveSecretValueForEphemeralAccess,
     resolveSecretValueForSandboxCleanup,
+    resolveSecretValueForDeviceLoginCheck,
 
     create: async (
       companyId: string,

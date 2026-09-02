@@ -288,6 +288,47 @@ describe("device-login credential promotion", () => {
     expect(result.accountHomeCreated).toBe(false);
   });
 
+  it("two concurrent promotions for the same account report only one accountHomeCreated true", async () => {
+    // Two different logins for the SAME Codex account run their own
+    // promotion slot, so they can promote at the same time. Without a lock
+    // around the absence check and the directory creation, both calls could
+    // see the directory as absent and both report `created: true`; a caller
+    // that later deletes the directory on `created: true` would then delete
+    // a home the other call's login still uses.
+    const home = await makeInstanceRoot();
+    const env = envFor(home);
+    const [first, second] = await Promise.all([
+      promoteDeviceLoginCredential({
+        authBytes: subscriptionAuth({ accountId: ACCOUNT, lastRefresh: NEWER, marker: "racer-a" }),
+        companyId: COMPANY_A,
+        userInitiated: true,
+        checkReadiness: ready,
+        isSoleActiveOwner: soleOwner,
+        env,
+        log: noopLog,
+      }),
+      promoteDeviceLoginCredential({
+        authBytes: subscriptionAuth({ accountId: ACCOUNT, lastRefresh: NEWER, marker: "racer-b" }),
+        companyId: COMPANY_A,
+        userInitiated: true,
+        checkReadiness: ready,
+        isSoleActiveOwner: soleOwner,
+        env,
+        log: noopLog,
+      }),
+    ]);
+    // Both racers still authenticate; only the timestamp-comparison outcome
+    // (`promoted` vs. `kept`) can differ, because they carry the same
+    // `lastRefresh` timestamp.
+    expect(["promoted", "kept"]).toContain(first.outcome);
+    expect(["promoted", "kept"]).toContain(second.outcome);
+    const createdFlags = [first.accountHomeCreated, second.accountHomeCreated];
+    expect(createdFlags.filter(Boolean)).toHaveLength(1);
+    await expect(
+      lstat(resolveCodexAuthCacheEntryPath(env, ACCOUNT, COMPANY_A)),
+    ).resolves.toBeDefined();
+  });
+
   it("promotion keeps the company default home when it holds another account", async () => {
     const home = await makeInstanceRoot();
     const env = envFor(home);
