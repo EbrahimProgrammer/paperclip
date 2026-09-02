@@ -1216,7 +1216,7 @@ fn redact_sensitive_text_values(input: &str) -> String {
             while value_start < bytes.len() && bytes[value_start].is_ascii_whitespace() {
                 value_start += 1;
             }
-            let quote = bytes
+            let mut quote = bytes
                 .get(value_start)
                 .copied()
                 .filter(|value| matches!(value, b'\'' | b'"'));
@@ -1243,6 +1243,17 @@ fn redact_sensitive_text_values(input: &str) -> String {
                     break;
                 }
                 authorization_value_extends_to_line_end |= !recognized_scheme;
+            }
+            // Authorization schemes can be followed by a quoted credential
+            // even when the assignment value itself is not quoted.
+            if quote.is_none() {
+                quote = bytes
+                    .get(value_start)
+                    .copied()
+                    .filter(|value| matches!(value, b'\'' | b'"'));
+                if quote.is_some() {
+                    value_start += 1;
+                }
             }
             if is_redaction_marker(value_start) {
                 continue;
@@ -1517,6 +1528,12 @@ mod tests {
         assert_eq!(
             redact_text("401 Unauthorized: Authorization: Bearer secret-value; retry over HTTPS"),
             "401 Unauthorized: Authorization: Bearer [REDACTED]; retry over HTTPS"
+        );
+        assert_eq!(
+            redact_text(
+                "Authorization: Bearer \"secret-value\"; Proxy-Authorization: Basic 'credential'"
+            ),
+            "Authorization: Bearer \"[REDACTED]\"; Proxy-Authorization: Basic '[REDACTED]'"
         );
         assert_eq!(
             redact_text("request failed token=secret-value&reason=expired"),
