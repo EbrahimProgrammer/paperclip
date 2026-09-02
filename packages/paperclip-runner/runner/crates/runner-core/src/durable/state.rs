@@ -1223,8 +1223,10 @@ fn redact_sensitive_text_values(input: &str) -> String {
             if quote.is_some() {
                 value_start += 1;
             }
+            let mut authorization_value_extends_to_line_end = false;
             if key == "authorization" {
-                for scheme in ["bearer", "basic"] {
+                let mut recognized_scheme = false;
+                for scheme in ["bearer", "basic", "digest"] {
                     if !normalized[value_start..].starts_with(scheme) {
                         continue;
                     }
@@ -1236,8 +1238,11 @@ fn redact_sensitive_text_values(input: &str) -> String {
                     while value_start < bytes.len() && bytes[value_start].is_ascii_whitespace() {
                         value_start += 1;
                     }
+                    recognized_scheme = true;
+                    authorization_value_extends_to_line_end = scheme == "digest";
                     break;
                 }
+                authorization_value_extends_to_line_end |= !recognized_scheme;
             }
             if is_redaction_marker(value_start) {
                 continue;
@@ -1247,17 +1252,9 @@ fn redact_sensitive_text_values(input: &str) -> String {
                     .iter()
                     .position(|value| *value == quote)
                     .map_or(bytes.len(), |offset| value_start + offset)
-            } else if key == "authorization"
-                && !["bearer", "basic"].iter().any(|scheme| {
-                    normalized[separator + 1..]
-                        .trim_start()
-                        .to_ascii_lowercase()
-                        .starts_with(scheme)
-                })
-            {
+            } else if authorization_value_extends_to_line_end {
                 let mut end = value_start;
-                while end < bytes.len() && !matches!(bytes[end], b'\n' | b'\r' | b',' | b';' | b'&')
-                {
+                while end < bytes.len() && !matches!(bytes[end], b'\n' | b'\r') {
                     end += 1;
                 }
                 end
@@ -1519,6 +1516,12 @@ mod tests {
         assert_eq!(
             redact_text("Authorization: Basic dXNlcjpwYXNz retry"),
             "Authorization: Basic [REDACTED] retry"
+        );
+        assert_eq!(
+            redact_text(
+                "Authorization: Digest username=\"u\", nonce=\"secret\", response=\"credential\""
+            ),
+            "Authorization: Digest [REDACTED]"
         );
         assert_eq!(
             redact_text("login failed password=\"two word secret\" status=403"),
