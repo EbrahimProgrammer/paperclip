@@ -332,13 +332,19 @@ export function OnboardingWizard() {
       return null; // malformed: treated as stale below
     }
   }, []);
-  // The ownership gate only controls the inner wizard's first mount. Once it
-  // is visible, a company-list invalidation is ordinary background work. If
-  // it unmounted the inner wizard then, all of its live useState values would
-  // be reconstructed from `rawBlob` above — the value from page load, not the
-  // draft the customer just typed — and a successful organization submission
-  // would appear to do nothing.
-  const [innerWizardHasMounted, setInnerWizardHasMounted] = useState(false);
+  // The ownership gate is closed after the initial validation succeeds, or
+  // when no validation is needed. A later company-list invalidation is
+  // ordinary background work. If it unmounted the inner wizard then, all of
+  // its live useState values would be reconstructed from `rawBlob` above —
+  // the value from page load, not the draft the customer just typed — and a
+  // successful organization submission would appear to do nothing.
+  //
+  // A failed validation must remain retryable. A later successful fetch needs
+  // to remount the wizard with the now-authorized draft, rather than keeping
+  // the defaults it showed while ownership was unknown.
+  const [initialDraftValidationComplete, setInitialDraftValidationComplete] = useState(
+    rawBlob === undefined || rawBlob === null,
+  );
 
   // Whether this account owns the company the draft names is an authorization
   // question, and the answer has to be about the account asking now.
@@ -433,13 +439,17 @@ export function OnboardingWizard() {
   // wizard writes nothing. If the wizard is open the customer is onboarding
   // right now, which supersedes the draft anyway.
   const waitForInitialDraftValidation =
-    !innerWizardHasMounted && rawBlob !== undefined && companiesQuery.isFetching;
+    !initialDraftValidationComplete && rawBlob !== undefined && companiesQuery.isFetching;
 
   useEffect(() => {
-    if (!waitForInitialDraftValidation && !innerWizardHasMounted) {
-      setInnerWizardHasMounted(true);
+    if (
+      !initialDraftValidationComplete &&
+      ownershipDecidable &&
+      !companiesQuery.isFetching
+    ) {
+      setInitialDraftValidationComplete(true);
     }
-  }, [innerWizardHasMounted, waitForInitialDraftValidation]);
+  }, [initialDraftValidationComplete, ownershipDecidable, companiesQuery.isFetching]);
 
   if (waitForInitialDraftValidation) {
     return null;
