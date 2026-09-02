@@ -29,6 +29,16 @@ describe("paperclip_runner operational skill normalization", () => {
       .toMatchObject({ model: "gpt-5.5" });
   });
 
+  it("does not replace a non-Codex provider model with the Codex default", () => {
+    expect(normalizePaperclipRunnerAdapterConfig("paperclip_runner", {
+      provider: "claude_managed",
+      model: "claude-sonnet-5",
+    })).toMatchObject({
+      provider: "claude_managed",
+      model: "claude-sonnet-5",
+    });
+  });
+
   it("removes the legacy operational skill while preserving optional skills", () => {
     const normalized = normalizePaperclipOperationalSkillPreference("paperclip_runner", {
       paperclipSkillSync: {

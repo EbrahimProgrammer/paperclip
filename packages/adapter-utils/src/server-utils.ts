@@ -3091,13 +3091,15 @@ export function normalizePaperclipRunnerAdapterConfig(
   config: Record<string, unknown>,
 ): Record<string, unknown> {
   if (adapterType !== "paperclip_runner") return config;
-  const next = {
+  const next: Record<string, unknown> = {
     provider: "codex",
     codexPermissionMode: PAPERCLIP_RUNNER_PERMISSION_CAPABILITIES.codex.defaultMode,
     lifecycleMode: "per_turn",
     ...config,
-    model: resolvePaperclipRunnerModel("codex", config.model),
   };
+  if (next.provider === "codex") {
+    next.model = resolvePaperclipRunnerModel("codex", config.model);
+  }
   return normalizePaperclipOperationalSkillPreference(adapterType, next);
 }
 
