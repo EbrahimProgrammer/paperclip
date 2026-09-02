@@ -363,6 +363,13 @@ export async function assertAccountHomeCacheDirStillValid(
  * `null` for an absent, unusable, or api-key credential (no subscription
  * identity). This mirrors `parseAuth` in `codex-auth-merge-decision.cjs`; keep
  * the two in step when the auth format changes.
+ *
+ * The returned value is the exact, untrimmed `account_id` string. A caller
+ * passes it on to {@link toAccountHandle} unchanged: that function is the
+ * one place that decides whether surrounding whitespace is acceptable, and it
+ * must see the raw value to reject an identifier that differs from another
+ * one only by whitespace. Trimming here, before that check runs, would let
+ * two distinct identifiers collapse onto the same account handle.
  */
 export function readSubscriptionAccountId(bytes: Buffer): string | null {
   let parsed: unknown;
@@ -384,7 +391,10 @@ export function readSubscriptionAccountId(bytes: Buffer): string | null {
     return null;
   }
   const tokenRecord = tokens as Record<string, unknown>;
-  const accountId = typeof tokenRecord.account_id === "string" ? tokenRecord.account_id.trim() : "";
+  const rawAccountId = typeof tokenRecord.account_id === "string" ? tokenRecord.account_id : "";
+  // A blank-or-whitespace-only value is absent; a value with real content
+  // keeps its exact, untrimmed form.
+  const accountId = rawAccountId.trim().length > 0 ? rawAccountId : "";
   const hasTokenMaterial = ["id_token", "access_token", "refresh_token"].some((key) => {
     const value = tokenRecord[key];
     return typeof value === "string" && value.trim().length > 0;

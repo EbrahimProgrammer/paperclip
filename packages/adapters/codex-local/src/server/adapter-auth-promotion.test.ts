@@ -390,6 +390,43 @@ describe("device-login credential promotion", () => {
     await expect(lstat(companyHomeAuthPath(env, COMPANY_A))).rejects.toThrow();
   });
 
+  it("a whitespace-padded account identifier never shares a home with, or reports as authenticated against, the unpadded account", async () => {
+    // A distinct identifier with surrounding whitespace must reject, not
+    // alias onto the unpadded account's home. Promote the unpadded account
+    // first, then attempt a second login whose identifier differs only by a
+    // leading space. The second login must fail, and it must never read or
+    // report a "kept" outcome against the first account's home.
+    const home = await makeInstanceRoot();
+    const env = envFor(home);
+    await promoteDeviceLoginCredential({
+      authBytes: subscriptionAuth({ accountId: ACCOUNT, lastRefresh: NEWER, marker: "original" }),
+      companyId: COMPANY_A,
+      userInitiated: true,
+      checkReadiness: ready,
+      isSoleActiveOwner: soleOwner,
+      env,
+      log: noopLog,
+    });
+    await expect(
+      promoteDeviceLoginCredential({
+        authBytes: subscriptionAuth({ accountId: ` ${ACCOUNT}`, lastRefresh: NEWER, marker: "padded" }),
+        companyId: COMPANY_A,
+        userInitiated: true,
+        checkReadiness: ready,
+        isSoleActiveOwner: soleOwner,
+        env,
+        log: noopLog,
+      }),
+    ).rejects.toThrow();
+    // The unpadded account's home still holds only the credential the first
+    // login wrote. The padded login never read it, never wrote it, and never
+    // received a "kept" outcome that would report it as authenticated.
+    const accountAuth = JSON.parse(
+      await readFile(resolveCodexAuthCacheEntryPath(env, ACCOUNT, COMPANY_A), "utf8"),
+    );
+    expect(accountAuth.tokens.refresh_token).toContain("original");
+  });
+
   it("a broken account-home directory fails the whole login", async () => {
     const home = await makeInstanceRoot();
     const env = envFor(home);
