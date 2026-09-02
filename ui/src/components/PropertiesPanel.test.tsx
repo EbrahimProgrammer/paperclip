@@ -131,7 +131,24 @@ describe("PropertiesPanel", () => {
       const inner = aside!.querySelector<HTMLDivElement>(":scope > div:not([role])");
       expect(inner!.style.width).toBe("434px");
       expect(inner!.style.minWidth).toBe("434px");
-      expect(aside!.querySelector("header")?.className).toContain("h-(--sz-60px)");
+      expect(aside!.querySelector("header")?.className).toContain(
+        "h-(--side-panel-header-height)",
+      );
+    });
+
+    it("removes the left divider only while the sidebar is maximized", async () => {
+      await renderPanel({ taskDetailLayout: true });
+      const aside = container.querySelector("aside")!;
+      const maximize = container.querySelector<HTMLButtonElement>(
+        '[aria-label="Maximize side panel"]',
+      )!;
+
+      expect(aside.className).toContain("border-l");
+      maximize.click();
+      await flushReact();
+
+      expect(aside.className).not.toContain("border-l");
+      expect(container.querySelector("section")?.getAttribute("data-maximized")).toBe("true");
     });
 
     it("uses an X to close the Streamlined task-detail sidebar", async () => {

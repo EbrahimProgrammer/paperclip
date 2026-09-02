@@ -60,10 +60,7 @@ export function SidePanelFrame({
     >
       {(header || trailingControls) ? (
         <header className={cn(
-          "flex min-w-0 shrink-0 items-center gap-1 px-2",
-          headerSize === "task-detail"
-            ? "h-(--sz-60px)"
-            : "h-(--side-panel-header-height)",
+          "flex h-(--side-panel-header-height) min-w-0 shrink-0 items-center gap-1 px-2",
         )}>
           <div className="flex min-w-0 flex-1 self-stretch">{header}</div>
           {trailingControls ? (

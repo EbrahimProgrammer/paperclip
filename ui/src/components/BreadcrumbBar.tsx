@@ -82,7 +82,7 @@ export function BreadcrumbBar({ taskDetailLayout = false }: { taskDetailLayout?:
 
   if (isMobile && mobileToolbar) {
     return (
-      <div className="border-b border-border px-2 h-12 shrink-0 flex items-center">
+      <div className="h-(--sz-60px) shrink-0 flex items-center border-b border-border px-2">
         {mobileToolbar}
       </div>
     );
@@ -90,7 +90,7 @@ export function BreadcrumbBar({ taskDetailLayout = false }: { taskDetailLayout?:
 
   if (breadcrumbs.length === 0) {
     return (
-      <div className="border-b border-border px-4 md:px-6 h-12 shrink-0 flex items-center justify-end">
+      <div className="h-(--sz-60px) shrink-0 flex items-center justify-end border-b border-border px-4 md:px-6">
         {globalToolbarSlots}
       </div>
     );
@@ -173,7 +173,7 @@ export function BreadcrumbBar({ taskDetailLayout = false }: { taskDetailLayout?:
   // Single breadcrumb = page title (uppercase)
   if (breadcrumbs.length === 1) {
     return (
-      <div className="border-b border-border px-4 md:px-6 h-12 shrink-0 flex items-center">
+      <div className="h-(--sz-60px) shrink-0 flex items-center border-b border-border px-4 md:px-6">
         {menuButton}
         <div className="min-w-0 overflow-hidden flex-1">
           {breadcrumbs[0].leading || breadcrumbs[0].identifier ? (
@@ -199,9 +199,8 @@ export function BreadcrumbBar({ taskDetailLayout = false }: { taskDetailLayout?:
   return (
     <div
       className={cn(
-        "relative shrink-0 flex items-center",
-        !taskDetailLayout && "border-b border-border",
-        taskDetailLayout ? "h-(--sz-60px) px-3" : "h-12 px-4 md:px-6",
+        "relative h-(--sz-60px) shrink-0 flex items-center border-b border-border",
+        taskDetailLayout ? "px-3" : "px-4 md:px-6",
       )}
     >
       {menuButton}

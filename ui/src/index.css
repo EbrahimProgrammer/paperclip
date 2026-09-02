@@ -276,7 +276,7 @@
 
   /* Portable side-panel geometry and hierarchy. These stay centralized so
      task, project, agent, and future hosts render the same Codex-like chrome. */
-  --side-panel-header-height: var(--sz-48px);
+  --side-panel-header-height: var(--sz-60px);
   --side-panel-tab-height: var(--sz-30px);
   --side-panel-streamlined-tab-min-width: var(--sz-72px);
   --side-panel-streamlined-tab-max-width: var(--sz-160px);
@@ -333,11 +333,11 @@
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
+  --background: oklch(0.205 0 0);
   --foreground: oklch(0.985 0 0);
-  --side-panel-bg: rgb(10 10 10);
+  --side-panel-bg: var(--background);
   --side-panel-fg: oklch(0.985 0 0);
-  --streamlined-task-detail-bg: #171717;
+  --streamlined-task-detail-bg: var(--background);
   --card: oklch(0.205 0 0);
   --card-foreground: oklch(0.985 0 0);
   --popover: oklch(0.205 0 0);

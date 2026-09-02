@@ -326,7 +326,8 @@ function ResizablePropertiesPanel({
       <aside
         ref={asideRef}
         className={cn(
-          "hidden md:flex border-l border-border bg-card flex-col",
+          "hidden md:flex bg-card flex-col",
+          !maximized && "border-l border-border",
           isFixed
             ? "tc-pane-glide fixed z-40 overflow-hidden"
             : cn(

@@ -129,7 +129,7 @@ export function Sidebar({ contentHeaderControls = false }: { contentHeaderContro
           the header's spare width goes to the workspace/organization name,
           which is the user's orientation anchor and truncates otherwise.
           Search is the first nav item below instead. */}
-      <div className="flex items-center gap-1 px-3 h-12 shrink-0">
+      <div className="flex h-(--sz-60px) shrink-0 items-center gap-1 px-3">
         <SidebarCompanyMenu />
         {/* In the collapsed rail the toggle doesn't fit beside the logo —
             keeping it would overflow the 64px rail and squeeze the logo out of

@@ -14,7 +14,7 @@ Never put React nodes or fetched content in a persisted `SidePanelTabRecord`. Pr
 
 `SidePanelTabs` also accepts `appearance="streamlined-task"` for the experimental task-detail shell. That appearance preserves the approved pre-rebase Codex-inspired treatment—equal-width text tabs, separated surfaces, edge fades, and hover-revealed close actions—while the default appearance remains master's portable side-panel chrome.
 
-Use `headerSize="task-detail"` on `SidePanelFrame` only when the panel shares a row with the 60px task breadcrumb bar. Other hosts keep the default portable header height.
+Use `headerSize="task-detail"` on `SidePanelFrame` when the panel shares the 60px task breadcrumb row. It keeps the task-detail footer treatment while matching the default portable header height.
 
 `SidePanelWindowControls` defaults to the production visibility-toggle icon. Streamlined task-detail panels use `closeControl="close"` for an explicit X while retaining the same close behavior and accessible labeling.
 

@@ -11,6 +11,8 @@ const listApplicationsMock = vi.hoisted(() => vi.fn());
 const listConnectionsMock = vi.hoisted(() => vi.fn());
 const listUserDirectoryMock = vi.hoisted(() => vi.fn());
 const navigateMock = vi.hoisted(() => vi.fn());
+const setBreadcrumbsMock = vi.hoisted(() => vi.fn());
+const streamlinedUiState = vi.hoisted(() => ({ enabled: true }));
 
 vi.mock("@/api/tools", () => ({
   toolsApi: {
@@ -41,7 +43,11 @@ vi.mock("@/context/CompanyContext", () => ({
 }));
 
 vi.mock("@/context/BreadcrumbContext", () => ({
-  useBreadcrumbs: () => ({ setBreadcrumbs: vi.fn() }),
+  useBreadcrumbs: () => ({ setBreadcrumbs: setBreadcrumbsMock }),
+}));
+
+vi.mock("@/hooks/useStreamlinedUiEnabled", () => ({
+  useStreamlinedUiEnabled: () => streamlinedUiState,
 }));
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -128,6 +134,7 @@ describe("Browse store door (PAP-13254 door 1)", () => {
     listApplicationsMock.mockResolvedValue({ applications: [] });
     listConnectionsMock.mockResolvedValue({ connections: [] });
     listUserDirectoryMock.mockResolvedValue({ users: [] });
+    streamlinedUiState.enabled = true;
     container = document.createElement("div");
     document.body.appendChild(container);
   });
@@ -156,6 +163,8 @@ describe("Browse store door (PAP-13254 door 1)", () => {
   it("renders the store header, popular grid, gallery, and BYO card", async () => {
     await renderBrowse();
 
+    expect(setBreadcrumbsMock).toHaveBeenCalledWith([{ label: "Apps" }]);
+
     const text = container.textContent ?? "";
     expect(text).toContain("Browse");
     expect(text).toContain("Choose an app or connect your own MCP server.");
@@ -179,6 +188,16 @@ describe("Browse store door (PAP-13254 door 1)", () => {
     expect(text).not.toContain("review its actions before enabling it");
     expect(text).not.toContain("Vercel Connect");
     expect(text).not.toContain("Composio");
+  });
+
+  it("preserves the company breadcrumb when Streamlined UI is disabled", async () => {
+    streamlinedUiState.enabled = false;
+    await renderBrowse();
+
+    expect(setBreadcrumbsMock).toHaveBeenCalledWith([
+      { label: "Paperclip", href: "/dashboard" },
+      { label: "Apps" },
+    ]);
   });
 
   it("does not surface Vercel Connect even when the backend capability is enabled", async () => {

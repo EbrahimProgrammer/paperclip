@@ -72,4 +72,19 @@ describe("ContextualSidebarFrame", () => {
     expect(mockNavigate).toHaveBeenCalledWith("/PAP/issues/task-1");
     act(() => root.unmount());
   });
+
+  it("can omit contextual identity when the breadcrumb already provides it", () => {
+    const root = createRoot(container);
+    act(() => {
+      root.render(
+        <ContextualSidebarFrame surface="skills" title="Skills" showHeader={false}>
+          <nav>Skill links</nav>
+        </ContextualSidebarFrame>,
+      );
+    });
+
+    expect(container.textContent).toBe("Skill links");
+    expect(container.querySelector('[aria-label="Back from Skills"]')).toBeNull();
+    act(() => root.unmount());
+  });
 });

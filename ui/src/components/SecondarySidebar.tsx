@@ -3,9 +3,9 @@ import { cn } from "@/lib/utils";
 import { SidebarNavExpandedProvider } from "./SidebarNavItem";
 
 /**
- * Full-width content adapter for a contextual sidebar. Layout places this
- * inside the same resizable SidebarShell used by the global navigation; the
- * global rail is replaced rather than left visible beside it.
+ * Content adapter for a contextual sidebar. Depending on the route, Layout
+ * either places it inside the primary SidebarShell or mounts it as an adjacent
+ * secondary rail.
  */
 export function SecondarySidebar({
   children,

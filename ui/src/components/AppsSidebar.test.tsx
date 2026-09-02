@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppsSidebar } from "./AppsSidebar";
+import { contextualSidebarStyles } from "./contextual-sidebar-styles";
 
 const sidebarNavItemMock = vi.hoisted(() => vi.fn());
 const mockToolsApi = vi.hoisted(() => ({
@@ -97,7 +98,7 @@ describe("AppsSidebar", () => {
     vi.clearAllMocks();
   });
 
-  it("renders Apps and Developer sections in one sidebar", async () => {
+  it("renders consumer and Developer links without a redundant contextual heading", async () => {
     const root = createRoot(container);
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -112,7 +113,8 @@ describe("AppsSidebar", () => {
     });
     await flushReact();
 
-    expect(container.textContent).toContain("Apps");
+    expect(container.textContent).not.toContain("Paperclip");
+    expect(container.textContent).not.toContain("Apps");
     expect(container.textContent).toContain("Developer");
     // The Developer boundary caption frames who the door is for (PAP-13241 §5).
     expect(container.textContent).toContain("Advanced setup for developers");
@@ -157,6 +159,23 @@ describe("AppsSidebar", () => {
     expect(sidebarNavItemMock).toHaveBeenCalledWith(
       expect.objectContaining({ to: "/apps/advanced/audit", label: "Activity", end: true }),
     );
+    expect(container.querySelector('[data-slot="contextual-sidebar-nav"]')?.className).toBe(
+      contextualSidebarStyles.nav,
+    );
+    expect(container.querySelector('[data-slot="contextual-sidebar-section"]')?.className).toBe(
+      contextualSidebarStyles.section,
+    );
+    expect(container.querySelector('[data-slot="contextual-sidebar-section-label"]')?.className).toBe(
+      contextualSidebarStyles.sectionLabel,
+    );
+    expect(container.querySelector('[data-slot="contextual-sidebar-section-description"]')?.className).toBe(
+      contextualSidebarStyles.sectionDescription,
+    );
+    expect(
+      Array.from(container.querySelectorAll('[data-slot="contextual-sidebar-group"]')).every(
+        (group) => group.className === contextualSidebarStyles.group,
+      ),
+    ).toBe(true);
 
     await act(async () => {
       root.unmount();

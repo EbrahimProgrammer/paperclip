@@ -4,6 +4,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SkillsContextualSidebar } from "./SkillsContextualSidebar";
+import { contextualSidebarStyles } from "./contextual-sidebar-styles";
 
 const sidebarNavItemMock = vi.hoisted(() => vi.fn());
 const mockLocation = vi.hoisted(() => ({ pathname: "/PAP/skills", search: "" }));
@@ -57,7 +58,33 @@ describe("SkillsContextualSidebar", () => {
     expect(container.textContent).toContain("Discover");
     expect(container.textContent).toContain("My Skills");
     expect(container.textContent).toContain("Skills you create, edit, and test.");
+    expect(container.textContent).not.toContain("Paperclip");
+    expect(container.querySelector('[aria-label="Back from Skills"]')).toBeNull();
     expect(container.querySelector('[aria-current="page"]')?.textContent).toBe("Installed");
+
+    act(() => root.unmount());
+  });
+
+  it("uses the shared contextual-navigation spacing and type contract", () => {
+    const root = render();
+
+    expect(container.querySelector('[data-slot="contextual-sidebar-nav"]')?.className).toBe(
+      contextualSidebarStyles.nav,
+    );
+    expect(container.querySelector('[data-slot="contextual-sidebar-section"]')?.className).toBe(
+      contextualSidebarStyles.section,
+    );
+    expect(container.querySelector('[data-slot="contextual-sidebar-section-label"]')?.className).toBe(
+      contextualSidebarStyles.sectionLabel,
+    );
+    expect(container.querySelector('[data-slot="contextual-sidebar-section-description"]')?.className).toBe(
+      contextualSidebarStyles.sectionDescription,
+    );
+    expect(
+      Array.from(container.querySelectorAll('[data-slot="contextual-sidebar-group"]')).every(
+        (group) => group.className === contextualSidebarStyles.group,
+      ),
+    ).toBe(true);
 
     act(() => root.unmount());
   });

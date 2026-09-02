@@ -98,9 +98,9 @@ describe("side-panel shell controls", () => {
     const header = container.querySelector("header")!;
     const footer = container.querySelector("footer")!;
     expect(frame.className).toContain("border-l");
-    expect(header.className).toContain("h-(--sz-60px)");
+    expect(header.className).toContain("h-(--side-panel-header-height)");
+    expect(header.className).not.toContain("h-(--sz-60px)");
     expect(header.className).not.toContain("border-b");
-    expect(header.className).not.toContain("h-(--side-panel-header-height)");
     expect(footer.className).not.toContain("border-t");
   });
 

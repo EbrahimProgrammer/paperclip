@@ -6,6 +6,7 @@ import {
 } from "@/pages/skills/skills-navigation";
 import { ContextualSidebarFrame } from "./ContextualSidebarFrame";
 import { SidebarNavItem } from "./SidebarNavItem";
+import { contextualSidebarStyles } from "./contextual-sidebar-styles";
 
 export {
   resolveSkillsDiscoveryView,
@@ -25,9 +26,15 @@ export function SkillsContextualSidebar() {
       title="Skills"
       icon={Library}
       fallbackTo="/dashboard"
+      showHeader={false}
+      className="border-r border-border bg-background"
     >
-      <nav aria-label="Skills" className="flex min-h-0 flex-1 flex-col overflow-y-auto px-3 py-2">
-        <div className="flex flex-col gap-0.5">
+      <nav
+        aria-label="Skills"
+        data-slot="contextual-sidebar-nav"
+        className={contextualSidebarStyles.nav}
+      >
+        <div data-slot="contextual-sidebar-group" className={contextualSidebarStyles.group}>
           <SidebarNavItem
             to={SKILLS_NAVIGATION_HREFS.installed}
             label="Installed"
@@ -44,19 +51,27 @@ export function SkillsContextualSidebar() {
           />
         </div>
 
-        <div className="mt-4 border-t border-border pt-3">
-          <div className="px-2 pb-1 text-(length:--text-micro) font-medium uppercase tracking-wide text-muted-foreground">
+        <div data-slot="contextual-sidebar-section" className={contextualSidebarStyles.section}>
+          <div
+            data-slot="contextual-sidebar-section-label"
+            className={contextualSidebarStyles.sectionLabel}
+          >
             Author
           </div>
-          <SidebarNavItem
-            to={SKILLS_NAVIGATION_HREFS.authored}
-            label="My Skills"
-            icon={PencilRuler}
-            active={activeView === "authored"}
-          />
-          <p className="px-4 pt-1 text-xs leading-5 text-muted-foreground">
+          <p
+            data-slot="contextual-sidebar-section-description"
+            className={contextualSidebarStyles.sectionDescription}
+          >
             Skills you create, edit, and test.
           </p>
+          <div data-slot="contextual-sidebar-group" className={contextualSidebarStyles.group}>
+            <SidebarNavItem
+              to={SKILLS_NAVIGATION_HREFS.authored}
+              label="My Skills"
+              icon={PencilRuler}
+              active={activeView === "authored"}
+            />
+          </div>
         </div>
       </nav>
     </ContextualSidebarFrame>

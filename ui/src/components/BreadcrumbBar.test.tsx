@@ -121,7 +121,7 @@ describe("BreadcrumbBar", () => {
       'button[aria-label="Show task side panel"]',
     );
     expect(launcher).not.toBeNull();
-    expect(launcher?.closest(".h-12")?.textContent).toContain("PAP-16679");
+    expect(launcher?.closest(".h-\\(--sz-60px\\)")?.textContent).toContain("PAP-16679");
 
     act(() => launcher?.click());
     expect(onOpen).toHaveBeenCalledOnce();
@@ -139,7 +139,9 @@ describe("BreadcrumbBar", () => {
     const identifier = container.querySelector('[data-slot="task-title-identifier"]');
     expect(identifier).toBeTruthy();
     expect(identifier?.className).not.toContain("absolute");
-    expect(identifier?.closest(".relative")?.className).not.toContain("border-b");
+    expect(identifier?.closest(".relative")?.className).toContain("border-b");
+    expect(identifier?.closest(".relative")?.className).toContain("border-border");
+    expect(identifier?.closest(".relative")?.className).toContain("h-(--sz-60px)");
 
     const title = Array.from(container.querySelectorAll("span"))
       .find((element) => element.textContent === "Hire your first engineer and create a hiring plan");

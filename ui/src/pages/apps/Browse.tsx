@@ -10,6 +10,7 @@ import { useNavigate } from "@/lib/router";
 import { cn } from "@/lib/utils";
 import { useCompany } from "@/context/CompanyContext";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
+import { useStreamlinedUiEnabled } from "@/hooks/useStreamlinedUiEnabled";
 import { queryKeys } from "@/lib/queryKeys";
 import { toolsApi } from "@/api/tools";
 import { accessApi } from "@/api/access";
@@ -78,15 +79,20 @@ export function Browse() {
   const navigate = useNavigate();
   const { selectedCompany, selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
+  const { enabled: streamlinedUiEnabled } = useStreamlinedUiEnabled();
   const [query, setQuery] = useState("");
 
   useEffect(() => {
-    setBreadcrumbs([
-      { label: selectedCompany?.name ?? "Organization", href: "/dashboard" },
-      { label: "Apps" },
-    ]);
+    setBreadcrumbs(
+      streamlinedUiEnabled
+        ? [{ label: "Apps" }]
+        : [
+            { label: selectedCompany?.name ?? "Organization", href: "/dashboard" },
+            { label: "Apps" },
+          ],
+    );
     return () => setBreadcrumbs([]);
-  }, [setBreadcrumbs, selectedCompany?.name]);
+  }, [setBreadcrumbs, selectedCompany?.name, streamlinedUiEnabled]);
 
   const galleryQuery = useQuery({
     queryKey: queryKeys.apps.gallery(selectedCompanyId ?? "__none__"),

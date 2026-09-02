@@ -595,6 +595,7 @@ describe("Sidebar", () => {
     const toggle = container.querySelector<HTMLButtonElement>('button[aria-label="Collapse sidebar"]');
     expect(toggle).not.toBeNull();
     expect(toggle?.getAttribute("aria-expanded")).toBe("true");
+    expect(toggle?.parentElement?.className).toContain("h-(--sz-60px)");
 
     flushSync(() => {
       toggle?.click();

@@ -603,7 +603,7 @@ describe("Layout", () => {
     },
   );
 
-  it("replaces the app sidebar with Apps navigation on legacy tools routes", async () => {
+  it("keeps the company nav beside Apps navigation on legacy tools routes", async () => {
     currentPathname = "/PAP/tools/runtime";
     const root = createRoot(container);
     const queryClient = new QueryClient({
@@ -621,7 +621,7 @@ describe("Layout", () => {
     await flushReact();
 
     expect(container.textContent).toContain("Apps sidebar");
-    expect(container.textContent).not.toContain("Main company nav");
+    expect(container.textContent).toContain("Main company nav");
     expect(container.textContent).not.toContain("Company settings sidebar");
 
     await act(async () => {
@@ -673,7 +673,7 @@ describe("Layout", () => {
     await flushReact();
 
     expect(container.textContent).toContain("Apps sidebar");
-    expect(container.textContent).not.toContain("Main company nav");
+    expect(container.textContent).toContain("Main company nav");
 
     await act(async () => {
       root.unmount();
@@ -698,7 +698,7 @@ describe("Layout", () => {
     await flushReact();
 
     expect(container.textContent).toContain("Apps sidebar");
-    expect(container.textContent).not.toContain("Main company nav");
+    expect(container.textContent).toContain("Main company nav");
 
     await act(async () => {
       root.unmount();
@@ -725,7 +725,7 @@ describe("Layout", () => {
     await flushReact();
 
     expect(container.textContent).toContain("Apps sidebar");
-    expect(container.textContent).not.toContain("Main company nav");
+    expect(container.textContent).toContain("Main company nav");
     expect(container.textContent).not.toContain("App detail sidebar");
 
     await act(async () => {
@@ -752,7 +752,7 @@ describe("Layout", () => {
       await flushReact();
 
       expect(container.textContent).toContain("Apps sidebar");
-      expect(container.textContent).not.toContain("Main company nav");
+      expect(container.textContent).toContain("Main company nav");
       expect(container.textContent).not.toContain("App detail sidebar");
 
       await act(async () => {
@@ -779,7 +779,7 @@ describe("Layout", () => {
     await flushReact();
 
     expect(container.textContent).toContain("App detail sidebar connection conn-1");
-    expect(container.textContent).not.toContain("Main company nav");
+    expect(container.textContent).toContain("Main company nav");
     expect(container.textContent).not.toContain("Apps sidebar");
 
     await act(async () => {
@@ -805,7 +805,7 @@ describe("Layout", () => {
     await flushReact();
 
     expect(container.textContent).toContain("App detail sidebar application app-1");
-    expect(container.textContent).not.toContain("Main company nav");
+    expect(container.textContent).toContain("Main company nav");
     expect(container.textContent).not.toContain("Apps sidebar");
 
     await act(async () => {
@@ -813,7 +813,7 @@ describe("Layout", () => {
     });
   });
 
-  it("replaces global navigation on Agent, Routine, and Skills contextual routes", async () => {
+  it("keeps global navigation beside Skills while Agent and Routine detail navigation still replaces it", async () => {
     async function renderAt(pathname: string) {
       currentPathname = pathname;
       const root = createRoot(container);
@@ -841,7 +841,22 @@ describe("Layout", () => {
     ] as const) {
       const root = await renderAt(pathname);
       expect(container.textContent).toContain(sidebarText);
-      expect(container.textContent).not.toContain("Main company nav");
+      if (pathname.startsWith("/PAP/skills")) {
+        expect(container.textContent).toContain("Main company nav");
+        const secondaryRail = container.querySelector("[data-secondary-sidebar]");
+        expect(secondaryRail?.classList.contains("w-60")).toBe(true);
+        expect(secondaryRail?.classList.contains("bg-background")).toBe(true);
+        const breadcrumb = Array.from(container.querySelectorAll("div"))
+          .find((element) => element.textContent === "Breadcrumbs");
+        expect(breadcrumb).toBeDefined();
+        expect(
+          breadcrumb && secondaryRail
+            ? breadcrumb.compareDocumentPosition(secondaryRail) & Node.DOCUMENT_POSITION_FOLLOWING
+            : 0,
+        ).not.toBe(0);
+      } else {
+        expect(container.textContent).not.toContain("Main company nav");
+      }
       await act(async () => {
         root.unmount();
       });

@@ -167,9 +167,9 @@ export function Layout() {
     }),
     [routeSidebarCompanyId, routeSidebarCompanyPrefix],
   );
-  // Contextual routes replace the global navigation inside the same sidebar
-  // shell. This keeps one stable left edge and avoids a compressed global rail
-  // competing with settings or app-specific navigation.
+  // Most contextual routes replace the global navigation inside the same
+  // sidebar shell. Skills and Apps are the exception in Streamlined UI: their
+  // local navigation is a second rail beside the persistent company nav.
   const sharedSecondarySidebar = isCompanySettingsRoute ? (
     <CompanySettingsSidebar />
   ) : !streamlinedUiEnabled && shellRoute.builtInContextualSurface === "skills" ? (
@@ -210,6 +210,12 @@ export function Layout() {
     <SkillsContextualSidebar />
   ) : sharedSecondarySidebar;
   const hasSecondarySidebar = secondarySidebar != null;
+  const keepsPrimarySidebar = streamlinedUiEnabled && hasSecondarySidebar && (
+    shellRoute.builtInContextualSurface === "skills"
+    || (appsEnabled && (isAppsRoute || isToolsRoute))
+  );
+  const replacesPrimarySidebar = streamlinedUiEnabled && hasSecondarySidebar && !keepsPrimarySidebar;
+  const showsAdjacentSecondarySidebar = hasSecondarySidebar && (!streamlinedUiEnabled || keepsPrimarySidebar);
   const contextualSurface: ContextualSidebarSurface | null = !streamlinedUiEnabled || !hasSecondarySidebar
     ? null
     : routeSidebarSlot && !shellRoute.builtInContextualSurface
@@ -664,22 +670,22 @@ export function Layout() {
               deploymentMode={health?.deploymentMode}
               serverGit={health?.serverInfo?.git}
               version={health?.version}
-              forceExpanded={streamlinedUiEnabled && hasSecondarySidebar}
+              forceExpanded={replacesPrimarySidebar}
             />
           </div>
         ) : (
           <SidebarShell
             open={sidebarOpen}
-            collapsed={streamlinedUiEnabled && hasSecondarySidebar ? false : collapsed}
-            peeking={streamlinedUiEnabled && hasSecondarySidebar ? false : peeking}
+            collapsed={replacesPrimarySidebar ? false : collapsed}
+            peeking={replacesPrimarySidebar ? false : peeking}
             resizable
-            onPanelMouseEnter={streamlinedUiEnabled && hasSecondarySidebar ? undefined : handlePanelPointerEnter}
-            onPanelMouseLeave={streamlinedUiEnabled && hasSecondarySidebar ? undefined : handlePanelPointerLeave}
-            onPanelFocusCapture={!(streamlinedUiEnabled && hasSecondarySidebar) && collapsed ? handlePanelFocus : undefined}
-            onPanelBlurCapture={!(streamlinedUiEnabled && hasSecondarySidebar) && collapsed ? handlePanelBlur : undefined}
+            onPanelMouseEnter={replacesPrimarySidebar ? undefined : handlePanelPointerEnter}
+            onPanelMouseLeave={replacesPrimarySidebar ? undefined : handlePanelPointerLeave}
+            onPanelFocusCapture={!replacesPrimarySidebar && collapsed ? handlePanelFocus : undefined}
+            onPanelBlurCapture={!replacesPrimarySidebar && collapsed ? handlePanelBlur : undefined}
           >
             <div className="flex flex-1 min-h-0">
-              {streamlinedUiEnabled && hasSecondarySidebar ? (
+              {replacesPrimarySidebar ? (
                 <SecondarySidebar>{secondarySidebar}</SecondarySidebar>
               ) : (
                 <Sidebar contentHeaderControls={useStreamlinedTaskDetailShell} />
@@ -689,13 +695,15 @@ export function Layout() {
               deploymentMode={health?.deploymentMode}
               serverGit={health?.serverInfo?.git}
               version={health?.version}
-              forceExpanded={streamlinedUiEnabled && hasSecondarySidebar}
+              forceExpanded={replacesPrimarySidebar}
             />
           </SidebarShell>
         )}
 
-        {!isMobile && !streamlinedUiEnabled && hasSecondarySidebar ? (
-          <SecondarySidebar>{secondarySidebar}</SecondarySidebar>
+        {!isMobile && showsAdjacentSecondarySidebar && !keepsPrimarySidebar ? (
+          <SecondarySidebar>
+            {secondarySidebar}
+          </SecondarySidebar>
         ) : null}
 
         <div className={cn("flex min-w-0 flex-col", isMobile ? "w-full" : "h-full flex-1")}>
@@ -717,6 +725,11 @@ export function Layout() {
             isMobile ? "block" : "flex flex-1 min-h-0",
             !isMobile && useStreamlinedTaskDetailShell && "streamlined-task-detail-surface",
           )}>
+            {!isMobile && keepsPrimarySidebar ? (
+              <SecondarySidebar className="w-60 shrink-0 bg-background">
+                {secondarySidebar}
+              </SecondarySidebar>
+            ) : null}
             <div className={cn(!isMobile && useStreamlinedTaskDetailShell ? "flex min-w-0 flex-1 flex-col" : "contents")}>
               {!isMobile && useStreamlinedTaskDetailShell ? (
                 <>
