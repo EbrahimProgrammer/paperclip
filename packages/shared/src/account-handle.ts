@@ -18,19 +18,27 @@ const ACCOUNT_HANDLE_PATTERN = /^[a-zA-Z0-9_.-]+$/;
  * `null` when the value cannot become one instead of throwing, so a caller
  * decides how to fail the operation.
  *
- * An input becomes a handle only when every rule below is true for its
- * trimmed value:
+ * The identifier is the account's identity key: it names one directory and
+ * one secret, so two distinct identifiers must never resolve to the same
+ * handle. A caller must never normalize the value before this check (for
+ * example, by trimming it) — normalizing first can alias a distinct
+ * identifier onto an already-claimed handle and let a login accept a
+ * different account's credential home as its own.
  *
+ * An input becomes a handle only when every rule below is true:
+ *
+ * - It carries no leading or trailing whitespace.
  * - It matches `/^[a-zA-Z0-9_.-]+$/`.
  * - It is {@link ACCOUNT_HANDLE_MAX_LENGTH} characters or shorter.
  * - It is neither `.` nor `..`.
  * - It does not start with `-` (a leading `-` reads as a command-line option).
  */
 export function toAccountHandle(rawAccountId: string): string | null {
-  const trimmed = typeof rawAccountId === "string" ? rawAccountId.trim() : "";
-  if (!ACCOUNT_HANDLE_PATTERN.test(trimmed)) return null;
-  if (trimmed.length > ACCOUNT_HANDLE_MAX_LENGTH) return null;
-  if (trimmed === "." || trimmed === "..") return null;
-  if (trimmed.startsWith("-")) return null;
-  return trimmed;
+  if (typeof rawAccountId !== "string" || rawAccountId.length === 0) return null;
+  if (rawAccountId.trim() !== rawAccountId) return null;
+  if (!ACCOUNT_HANDLE_PATTERN.test(rawAccountId)) return null;
+  if (rawAccountId.length > ACCOUNT_HANDLE_MAX_LENGTH) return null;
+  if (rawAccountId === "." || rawAccountId === "..") return null;
+  if (rawAccountId.startsWith("-")) return null;
+  return rawAccountId;
 }

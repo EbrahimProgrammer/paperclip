@@ -11,6 +11,23 @@ describe("toAccountHandle", () => {
     expect(toAccountHandle("a b")).toBeNull();
   });
 
+  it("returns null for a value with surrounding whitespace instead of trimming it", () => {
+    // Trimming a value before validation would let " acct-42" and "acct-42"
+    // resolve to the same handle. Two distinct identifiers must never share
+    // one handle, so surrounding whitespace is a rejection, not something to
+    // strip.
+    expect(toAccountHandle(" acct-42")).toBeNull();
+    expect(toAccountHandle("acct-42 ")).toBeNull();
+    expect(toAccountHandle(" acct-42 ")).toBeNull();
+    expect(toAccountHandle("\tacct-42\n")).toBeNull();
+    // The plain identifier with no surrounding whitespace still passes.
+    expect(toAccountHandle("acct-42")).toBe("acct-42");
+  });
+
+  it("returns null for an empty string", () => {
+    expect(toAccountHandle("")).toBeNull();
+  });
+
   it("returns null for a value that holds a plus sign, such as \"a+b\"", () => {
     expect(toAccountHandle("a+b")).toBeNull();
   });
