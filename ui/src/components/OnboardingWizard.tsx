@@ -332,6 +332,13 @@ export function OnboardingWizard() {
       return null; // malformed: treated as stale below
     }
   }, []);
+  // The ownership gate only controls the inner wizard's first mount. Once it
+  // is visible, a company-list invalidation is ordinary background work. If
+  // it unmounted the inner wizard then, all of its live useState values would
+  // be reconstructed from `rawBlob` above — the value from page load, not the
+  // draft the customer just typed — and a successful organization submission
+  // would appear to do nothing.
+  const [innerWizardHasMounted, setInnerWizardHasMounted] = useState(false);
 
   // Whether this account owns the company the draft names is an authorization
   // question, and the answer has to be about the account asking now.
@@ -404,10 +411,11 @@ export function OnboardingWizard() {
     onboardingDraftStorage.clear();
   }, [staleStateDetected]);
 
-  // A saved blob exists and the verification fetch is still in flight: wait,
-  // rather than mount the inner wizard with a premature and unrecoverable
-  // guess at the draft. Its ~20 `useState(saved?.x ?? default)` initializers
-  // only read `saved` once.
+  // A saved blob exists and its *initial* verification fetch is still in
+  // flight: wait, rather than mount the inner wizard with a premature and
+  // unrecoverable guess at the draft. Its ~20 `useState(saved?.x ?? default)`
+  // initializers only read `saved` once. After that first mount this is a
+  // background refetch, which must not tear down the customer's live state.
   //
   // `isFetching`, not `isLoading`. `isLoading` is false whenever the cache
   // holds retained data, so a refetch over a warm cache would mount the wizard
@@ -424,7 +432,16 @@ export function OnboardingWizard() {
   // it is itself gated on `effectiveOnboardingOpen`, so a mounted-but-closed
   // wizard writes nothing. If the wizard is open the customer is onboarding
   // right now, which supersedes the draft anyway.
-  if (rawBlob !== undefined && companiesQuery.isFetching) {
+  const waitForInitialDraftValidation =
+    !innerWizardHasMounted && rawBlob !== undefined && companiesQuery.isFetching;
+
+  useEffect(() => {
+    if (!waitForInitialDraftValidation && !innerWizardHasMounted) {
+      setInnerWizardHasMounted(true);
+    }
+  }, [innerWizardHasMounted, waitForInitialDraftValidation]);
+
+  if (waitForInitialDraftValidation) {
     return null;
   }
 
