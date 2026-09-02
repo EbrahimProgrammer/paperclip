@@ -93,6 +93,12 @@ describe("runner E2E catalog", () => {
       expectedRunCount: 2,
     });
     expect(localQuestion?.buildPrompt("nonce")).toContain("ask_user_questions");
+    expect(localQuestion?.buildPrompt("nonce")).toContain(
+      "do not spell, quote, repeat, announce, or include PAPERCLIP_E2E_QUESTION_DONE_nonce",
+    );
+    expect(localQuestion?.buildPrompt("nonce")).toContain(
+      "refer to it only as “the terminal marker.”",
+    );
     expect(restartQuestion).toMatchObject({
       flow: "question_resume_completion",
       expectedRunCount: 2,

@@ -117,6 +117,19 @@ it.each(["acpx-runtime-sidecar.js", "opencode-app-server-proxy.js"] as const)(
   },
 );
 
+it("derives the ACPX package root only from the verified dist/cli layout", () => {
+  expect(
+    runnerdLaunchProfileInternals.acpxProviderPackageRoot(
+      "/provider-pack/dist/cli/acpx-runtime-sidecar.js",
+    ),
+  ).toBe("/provider-pack");
+  expect(() =>
+    runnerdLaunchProfileInternals.acpxProviderPackageRoot(
+      "/unverified/acpx-runtime-sidecar.js",
+    ),
+  ).toThrow("ACPX sidecar must use the provider package dist/cli layout");
+});
+
 it("requires a provider-pack authority for remote ACPX artifact hashes", () => {
   expect(() =>
     runnerdLaunchProfileInternals.acpxRunnerLaunchProfile(
@@ -409,6 +422,7 @@ it.each([
         environment: {
           PATH: "/bin",
           ...credentialEnvironment,
+          PAPERCLIP_ACPX_PROVIDER_PACKAGE_ROOT: "/attacker/package-root",
           PAPERCLIP_API_KEY: "must-not-reach-provider",
           DATABASE_URL: "must-not-reach-provider",
         },
@@ -424,6 +438,8 @@ it.each([
       codexHome: "/isolated/codex-home",
       runtimeContextPath: "/isolated/runtime-context.json",
       hasRuntimeContext: true,
+      acpxSidecarPath:
+        "/verified/provider-pack/dist/cli/acpx-runtime-sidecar.js",
     });
 
     expect(environment).toMatchObject({
@@ -432,6 +448,7 @@ it.each([
       PAPERCLIP_RUN_ID: "run-1",
       PAPERCLIP_NORMALIZED_SESSION_ID: "session-1",
       PAPERCLIP_NATIVE_RUNTIME_CONTEXT_PATH: "/isolated/runtime-context.json",
+      PAPERCLIP_ACPX_PROVIDER_PACKAGE_ROOT: "/verified/provider-pack",
     });
     for (const key of allowed)
       expect(environment[key]).toBe(credentialEnvironment[key]);

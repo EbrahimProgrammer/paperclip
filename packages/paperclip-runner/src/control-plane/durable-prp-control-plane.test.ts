@@ -192,6 +192,48 @@ it("preserves an explicit OpenCode permission mode at the runner spawn boundary"
   expect(launches[0]!.environment.PAPERCLIP_OPENCODE_COMMAND).toBeUndefined();
 });
 
+it("preserves the controller-selected ACPX provider package root", () => {
+  const launches: RunnerProcessLaunchSpec[] = [];
+  spawnRunner({
+    connection: { mode: "connect", connectUrl: "ws://127.0.0.1:43127" },
+    stateDirectory: "/tmp/paperclip-runner-test",
+    identity,
+    ticket: "bootstrap-ticket",
+    maxOutboxBytes: 256 * 1024,
+    p0ReserveBytes: 64 * 1024,
+    runnerVersion: expectedRunnerVersion,
+    runnerDigest: expectedRunnerDigest,
+    environment: {
+      PATH: "/bin",
+      PAPERCLIP_ACPX_PROVIDER_PACKAGE_ROOT: "/verified/provider-pack",
+      NODE_PATH: "/untrusted/modules",
+    },
+    processLauncher: (spec) => {
+      launches.push(spec);
+      return {
+        child: {
+          pid: 42,
+          exitCode: null,
+          signalCode: null,
+          kill: () => true,
+        },
+        completion: Promise.resolve({
+          code: 0,
+          signal: null,
+          stdout: "",
+          stderr: "",
+        }),
+      };
+    },
+  });
+
+  expect(launches).toHaveLength(1);
+  expect(
+    launches[0]!.environment.PAPERCLIP_ACPX_PROVIDER_PACKAGE_ROOT,
+  ).toBe("/verified/provider-pack");
+  expect(launches[0]!.environment.NODE_PATH).toBeUndefined();
+});
+
 it("preserves file-backed AWS workload identity at the runner spawn boundary", () => {
   const launches: RunnerProcessLaunchSpec[] = [];
   spawnRunner({

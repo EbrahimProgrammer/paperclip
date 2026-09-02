@@ -24,6 +24,7 @@ import { resolveQualifiedAcpxProfile } from "./qualified-profiles.js";
 import {
   awaitVerifiedAcpxProviderExit,
   awaitVerifiedAcpxProviderOwnership,
+  createAcpxPackageJsonResolver,
   guardSnapshotModuleLookup,
   guardSnapshotModuleResolution,
   reapCurrentProviderProcessGroup,
@@ -48,6 +49,31 @@ afterEach(async () => {
 });
 
 describe("ACPX installation integrity", () => {
+  it("anchors dynamic provider package resolution at an explicit root", async () => {
+    const root = await mkdtemp(join(tmpdir(), "paperclip-acpx-package-root-"));
+    temporaryDirectories.push(root);
+    const providerDirectory = join(root, "node_modules", "qualified-provider");
+    const providerPackageJson = join(providerDirectory, "package.json");
+    await mkdir(providerDirectory, { recursive: true });
+    await Promise.all([
+      writeFile(join(root, "package.json"), JSON.stringify({ private: true })),
+      writeFile(
+        providerPackageJson,
+        JSON.stringify({ name: "qualified-provider", version: "1.0.0" }),
+      ),
+    ]);
+
+    expect(createAcpxPackageJsonResolver(root)("qualified-provider")).toBe(
+      providerPackageJson,
+    );
+    expect(() =>
+      createAcpxPackageJsonResolver("relative/provider-pack"),
+    ).toThrow("explicit normalized absolute path");
+    expect(() => createAcpxPackageJsonResolver(undefined)).toThrow(
+      "explicit normalized absolute path",
+    );
+  });
+
   it("rejects an unregistered provider exit proof", async () => {
     await expect(
       awaitVerifiedAcpxProviderExit({} as ChildProcess),

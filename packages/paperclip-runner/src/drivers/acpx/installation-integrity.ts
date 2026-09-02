@@ -198,6 +198,25 @@ const providerExitProof = new WeakMap<ChildProcess, Promise<void>>();
 
 export type AcpxPackageJsonResolver = (packageName: string) => string;
 
+export function createAcpxPackageJsonResolver(
+  providerPackageRoot: string | undefined,
+): AcpxPackageJsonResolver {
+  const root = providerPackageRoot?.trim();
+  if (
+    !root ||
+    !isAbsolute(root) ||
+    root.includes("\0") ||
+    resolve(root) !== root
+  ) {
+    throw new Error(
+      "ACPX provider package root must be an explicit normalized absolute path",
+    );
+  }
+  const providerRequire = createRequire(resolve(root, "package.json"));
+  return (packageName) =>
+    providerRequire.resolve(`${packageName}/package.json`);
+}
+
 export interface VerifiedAcpxInstallation {
   readonly commandDigest: string;
   readonly agentServerPackageJsonPath: string;
@@ -469,6 +488,12 @@ export async function verifyQualifiedAcpxInstallation(
 }
 
 function defaultPackageJsonResolver(packageName: string): string {
+  const providerPackageRoot = process.env.PAPERCLIP_ACPX_PROVIDER_PACKAGE_ROOT;
+  if (providerPackageRoot !== undefined) {
+    return createAcpxPackageJsonResolver(providerPackageRoot)(packageName);
+  }
+  // Source-mode and direct runtimes still have a stable module URL. The
+  // descriptor-backed runner sidecar always receives the explicit root above.
   return createRequire(import.meta.url).resolve(`${packageName}/package.json`);
 }
 

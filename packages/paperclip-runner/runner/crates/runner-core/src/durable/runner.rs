@@ -492,7 +492,30 @@ fn process_command<E: CommandExecutor>(
     // in the effect window, recovery returns an indeterminate result and never
     // executes the same logical command twice.
     store.save(state)?;
-    let execution = executor.execute(command)?;
+    let execution = match executor.execute(command) {
+        Ok(execution) => execution,
+        Err(error) => {
+            // An executor-returned error is a terminal observation, not crash
+            // ambiguity. Commit it before replying so recovery can replay the
+            // original provider/bootstrap failure without executing the
+            // command twice. A process death inside execute still leaves the
+            // pre-effect marker pending and remains indeterminate on recovery.
+            let message = error.to_string();
+            state.record_diagnostic(format!(
+                "{} command failed: {message}",
+                command.command_type
+            ));
+            let result = state.fail_command(
+                command,
+                json!({
+                    "code": "command_execution_failed",
+                    "message": message,
+                }),
+            )?;
+            store.save(state)?;
+            return Ok((result, CommandLifecycle::Continue));
+        }
+    };
     for (event_type, priority, payload) in execution.events {
         state.enqueue_event(config, event_type, priority, payload)?;
     }
@@ -566,6 +589,10 @@ mod tests {
         calls: usize,
     }
 
+    struct FailingExecutor {
+        calls: usize,
+    }
+
     struct RetainingEventExecutor {
         events: VecDeque<PolledEvent>,
         fail_acknowledgement: bool,
@@ -575,6 +602,15 @@ mod tests {
         fn execute(&mut self, _command: &Command) -> Result<CommandExecution, DurableRunnerError> {
             self.calls += 1;
             Ok(CommandExecution::result(json!({"calls": self.calls})))
+        }
+    }
+
+    impl CommandExecutor for FailingExecutor {
+        fn execute(&mut self, _command: &Command) -> Result<CommandExecution, DurableRunnerError> {
+            self.calls += 1;
+            Err(DurableRunnerError::invalid(
+                "provider bootstrap rejected authorization=Bearer test-secret",
+            ))
         }
     }
 
@@ -755,6 +791,78 @@ mod tests {
             .0;
         assert_eq!(executor.calls, 1);
         assert_eq!(first, replay);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn executor_failure_is_durable_and_does_not_become_indeterminate() {
+        let directory = std::env::temp_dir().join(format!(
+            "paperclip-runner-command-failure-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&directory);
+        let config = config(directory.clone());
+        let store = DurableStateStore::new(&directory).unwrap();
+        let (mut state, _) = store.load_or_create(&config).unwrap();
+        let mut executor = FailingExecutor { calls: 0 };
+        let command = command("session.open");
+
+        let failed = process_command(&mut state, &store, &config, &mut executor, &command)
+            .unwrap()
+            .0;
+        let (mut recovered, existed) = store.load_or_create(&config).unwrap();
+        let replay = process_command(&mut recovered, &store, &config, &mut executor, &command)
+            .unwrap()
+            .0;
+
+        assert!(existed);
+        assert_eq!(executor.calls, 1);
+        assert_eq!(failed, replay);
+        assert_eq!(failed.status, "failed");
+        assert_eq!(failed.result["code"], "command_execution_failed");
+        assert_eq!(
+            failed.result["message"],
+            "provider bootstrap rejected authorization=Bearer [REDACTED]"
+        );
+        assert!(recovered.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                == "session.open command failed: provider bootstrap rejected authorization=Bearer [REDACTED]"
+        }));
+        assert!(recovered
+            .diagnostics
+            .iter()
+            .all(|diagnostic| !diagnostic.contains("test-secret")));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn process_death_after_journaling_remains_indeterminate_without_reexecution() {
+        let directory = std::env::temp_dir().join(format!(
+            "paperclip-runner-command-indeterminate-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&directory);
+        let config = config(directory.clone());
+        let store = DurableStateStore::new(&directory).unwrap();
+        let (mut state, _) = store.load_or_create(&config).unwrap();
+        let command = command("session.open");
+
+        assert_eq!(
+            state.begin_command(&command).unwrap(),
+            CommandDisposition::Execute
+        );
+        store.save(&state).unwrap();
+
+        let (mut recovered, existed) = store.load_or_create(&config).unwrap();
+        let mut executor = CountingExecutor { calls: 0 };
+        let replay = process_command(&mut recovered, &store, &config, &mut executor, &command)
+            .unwrap()
+            .0;
+
+        assert!(existed);
+        assert_eq!(executor.calls, 0);
+        assert_eq!(replay.status, "indeterminate");
+        assert_eq!(replay.result["code"], "execution_indeterminate");
         fs::remove_dir_all(directory).unwrap();
     }
 

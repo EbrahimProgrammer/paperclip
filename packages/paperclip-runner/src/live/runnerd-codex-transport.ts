@@ -1111,6 +1111,20 @@ function resolveBuildOwnedCliArtifact(
   );
 }
 
+function acpxProviderPackageRoot(sidecarScript: string): string {
+  const cliDirectory = dirname(sidecarScript);
+  if (
+    basename(sidecarScript) !== "acpx-runtime-sidecar.js" ||
+    basename(cliDirectory) !== "cli" ||
+    basename(dirname(cliDirectory)) !== "dist"
+  ) {
+    throw new Error(
+      "runner_provider_package_root_incompatible: ACPX sidecar must use the provider package dist/cli layout",
+    );
+  }
+  return resolve(cliDirectory, "../..");
+}
+
 function acpxRunnerLaunchProfile(
   options: CapabilityRunnerdCodexTransportOptions,
   command: string,
@@ -1279,6 +1293,7 @@ export function createCapabilityRunnerdProviderEnvironment(input: {
   codexHome: string;
   runtimeContextPath: string;
   hasRuntimeContext: boolean;
+  acpxSidecarPath?: string;
 }): NodeJS.ProcessEnv {
   const commonIdentity = {
     PAPERCLIP_RUNNER_INSTANCE_ID: input.identity.runnerInstanceId,
@@ -1300,12 +1315,21 @@ export function createCapabilityRunnerdProviderEnvironment(input: {
     };
   }
   if (input.provider === "acpx") {
+    const sidecarPath =
+      input.acpxSidecarPath ??
+      input.options.acpxSidecarPath ??
+      resolve(packageRoot, "dist", "cli", "acpx-runtime-sidecar.js");
     return {
       ...createSanitizedAcpxSpawnInput(
         input.options.environment,
         input.options.acpxAgent ?? "codex",
       ).env,
       ...commonIdentity,
+      // The verified sidecar bundle cannot use import.meta.url while Node
+      // executes it through /proc/self/fd. Anchor its closed provider package
+      // lookups at the package that owns the already-authenticated bundle.
+      PAPERCLIP_ACPX_PROVIDER_PACKAGE_ROOT:
+        acpxProviderPackageRoot(sidecarPath),
       ...(input.options.providerRecoveryPolicy ===
       "allow_replacement_after_governed_wait"
         ? {
@@ -2354,6 +2378,7 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
           codexHome,
           runtimeContextPath,
           hasRuntimeContext: runtimeContext !== null,
+          acpxSidecarPath,
         }),
         this.options.environment,
       ),
@@ -2657,6 +2682,7 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
           codexHome,
           runtimeContextPath,
           hasRuntimeContext: runtimeContext !== null,
+          acpxSidecarPath,
         }),
         this.options.environment,
       ),
@@ -3361,6 +3387,7 @@ export const createRunnerdCodexTransport =
   createCapabilityRunnerdCodexTransport;
 
 export const runnerdLaunchProfileInternals = Object.freeze({
+  acpxProviderPackageRoot,
   acpxRunnerLaunchProfile,
   resolveBuildOwnedCliArtifact,
 });

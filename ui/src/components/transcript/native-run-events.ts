@@ -503,10 +503,44 @@ function timestamp(event: HeartbeatRunEvent, envelope: Record<string, unknown>):
   return Number.isNaN(Date.parse(createdAt)) ? new Date(0).toISOString() : createdAt;
 }
 
-function toolPresentation(payload: Record<string, unknown>): { name: string; input: unknown } {
+interface NativeToolItemDetails {
+  name: string | null;
+  input?: unknown;
+  result?: unknown;
+  isError: boolean;
+}
+
+function nativeToolItemDetails(
+  payload: Record<string, unknown>,
+): { id: string | null; details: NativeToolItemDetails } | null {
+  const item = normalizedItem(payload);
+  const kind = (text(item.type) ?? "").replaceAll("_", "").toLowerCase();
+  if (kind !== "tooluse" && kind !== "toolresult") return null;
+  const id = kind === "toolresult"
+    ? text(item.tool_use_id) ?? text(item.id)
+    : text(item.id);
+  return {
+    id,
+    details: {
+      name: text(item.name),
+      ...(Object.prototype.hasOwnProperty.call(item, "input")
+        ? { input: item.input }
+        : {}),
+      ...(Object.prototype.hasOwnProperty.call(item, "result")
+        ? { result: item.result }
+        : {}),
+      isError: item.isError === true || item.is_error === true,
+    },
+  };
+}
+
+function toolPresentation(
+  payload: Record<string, unknown>,
+  item?: NativeToolItemDetails,
+): { name: string; input: unknown } {
   const transport = text(payload.transport);
   const operation = text(payload.operation);
-  const reportedName = text(payload.name);
+  const reportedName = text(payload.name) ?? item?.name ?? null;
   if (transport === "process") {
     return {
       name: "Bash",
@@ -515,7 +549,7 @@ function toolPresentation(payload: Record<string, unknown>): { name: string; inp
   }
   return {
     name: reportedName ?? operation ?? "Tool",
-    input: {
+    input: item?.input ?? {
       ...(operation ? { operation } : {}),
       ...(text(payload.namespace) ? { namespace: text(payload.namespace) } : {}),
       ...(text(payload.target) ? { target: text(payload.target) } : {}),
@@ -531,6 +565,7 @@ function toolPresentation(payload: Record<string, unknown>): { name: string; inp
 export function nativeRunEventsToTranscript(events: readonly HeartbeatRunEvent[]): TranscriptEntry[] {
   const entries: TranscriptEntry[] = [];
   const startedToolIds = new Set<string>();
+  const completedToolIds = new Set<string>();
   let hasFinalAssistantMessage = false;
   let usageSummary: {
     ts: string;
@@ -569,6 +604,7 @@ export function nativeRunEventsToTranscript(events: readonly HeartbeatRunEvent[]
   const completedAgentMessageIds = new Set<string>();
   const completedReasoningIds = new Set<string>();
   const completionItemIdentityById = new Map<string, ItemIdentity>();
+  const nativeToolItemsById = new Map<string, NativeToolItemDetails>();
   for (const event of orderedEvents) {
     if (!isItemIdentityEvent(event.eventType)) continue;
     const envelope = record(event.payload?.prpEvent);
@@ -583,6 +619,25 @@ export function nativeRunEventsToTranscript(events: readonly HeartbeatRunEvent[]
     if (!payload) continue;
     const itemId = normalizedItemId(envelope, payload);
     if (!itemId) continue;
+    const toolItem = nativeToolItemDetails(payload);
+    if (toolItem) {
+      const toolId = toolItem.id ?? itemId;
+      const previous = nativeToolItemsById.get(toolId);
+      nativeToolItemsById.set(toolId, {
+        name: toolItem.details.name ?? previous?.name ?? null,
+        ...(toolItem.details.input !== undefined
+          ? { input: toolItem.details.input }
+          : previous?.input !== undefined
+            ? { input: previous.input }
+            : {}),
+        ...(toolItem.details.result !== undefined
+          ? { result: toolItem.details.result }
+          : previous?.result !== undefined
+            ? { result: previous.result }
+            : {}),
+        isError: toolItem.details.isError || previous?.isError === true,
+      });
+    }
     const identity = resolveItemIdentity(
       payload,
       completionItemIdentityById.get(itemId),
@@ -700,7 +755,8 @@ export function nativeRunEventsToTranscript(events: readonly HeartbeatRunEvent[]
       if (payload.schema !== TOOL_EXECUTION_SCHEMA) continue;
       const executionId = text(payload.executionId);
       if (!executionId) continue;
-      const presentation = toolPresentation(payload);
+      const nativeToolItem = nativeToolItemsById.get(executionId);
+      const presentation = toolPresentation(payload, nativeToolItem);
       if (!startedToolIds.has(executionId)) {
         startedToolIds.add(executionId);
         entries.push({
@@ -711,14 +767,24 @@ export function nativeRunEventsToTranscript(events: readonly HeartbeatRunEvent[]
           toolUseId: executionId,
         });
       }
-      if (event.eventType === "tool.execution.completed") {
+      if (event.eventType === "tool.execution.completed" && !completedToolIds.has(executionId)) {
+        completedToolIds.add(executionId);
+        const output = text(payload.output);
+        let content = output ?? "";
+        if (!output && nativeToolItem?.result !== undefined) {
+          try {
+            content = JSON.stringify(nativeToolItem.result) ?? "";
+          } catch {
+            content = "Tool result could not be serialized";
+          }
+        }
         entries.push({
           kind: "tool_result",
           ts,
           toolUseId: executionId,
           toolName: presentation.name,
-          content: text(payload.output) ?? "",
-          isError: payload.status === "failed",
+          content,
+          isError: payload.status === "failed" || nativeToolItem?.isError === true,
         });
       }
       continue;

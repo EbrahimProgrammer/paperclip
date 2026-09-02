@@ -537,6 +537,28 @@ impl DurableState {
         command: &Command,
         result: Value,
     ) -> Result<StoredCommandResult, DurableRunnerError> {
+        self.finish_command(command, "completed", result)
+    }
+
+    pub fn fail_command(
+        &mut self,
+        command: &Command,
+        result: Value,
+    ) -> Result<StoredCommandResult, DurableRunnerError> {
+        self.finish_command(command, "failed", result)
+    }
+
+    fn finish_command(
+        &mut self,
+        command: &Command,
+        status: &str,
+        result: Value,
+    ) -> Result<StoredCommandResult, DurableRunnerError> {
+        if status != "completed" && status != "failed" {
+            return Err(DurableRunnerError::invalid(
+                "durable command terminal status is unsupported",
+            ));
+        }
         {
             let stored = self
                 .processed_commands
@@ -568,7 +590,7 @@ impl DurableState {
             .processed_commands
             .get_mut(&command.command_id)
             .expect("pending command was checked above");
-        stored.status = "completed".to_owned();
+        stored.status = status.to_owned();
         stored.result = sanitized_result;
         Ok(stored.clone())
     }
@@ -903,7 +925,7 @@ fn validate_binding(
                 || command.controller_seq > state.last_controller_command_seq
                 || !matches!(
                     command.status.as_str(),
-                    "pending" | "completed" | "indeterminate"
+                    "pending" | "completed" | "failed" | "indeterminate"
                 )
             {
                 return Err(DurableRunnerError::invalid(

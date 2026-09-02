@@ -572,6 +572,7 @@ const structuredQuestionResumeTask = {
     [
       "Ask the user one structured question before completing this task.",
       "The question must be required, single-select, and offer Cobalt and Amber. Do not publish a final answer or mark the task Done while it is pending.",
+      `Before the answer arrives, do not spell, quote, repeat, announce, or include PAPERCLIP_E2E_QUESTION_DONE_${nonce} in any visible response, comment, or tool payload; refer to it only as “the terminal marker.”`,
       `In a native runner, call request_human_input exactly once with idempotencyKey \`question-${nonce}\`, interactionKind \`questions\`, title \`Verification word\`, prompt \`Choose the verification word\`, continuationPolicy \`wake_assignee\`, and payload {version:1,questions:[{id:\`verification-word\`,prompt:\`Choose the verification word.\`,selectionMode:\`single\`,required:true,options:[{id:\`cobalt\`,label:\`Cobalt\`},{id:\`amber\`,label:\`Amber\`}]}]}.`,
       "In a legacy runner, POST /api/issues/$PAPERCLIP_TASK_ID/interactions with {kind:`ask_user_questions`,continuationPolicy:`wake_assignee`,payload:{version:1,questions:[{id:`verification-word`,prompt:`Choose the verification word.`,selectionMode:`single`,required:true,options:[{id:`cobalt`,label:`Cobalt`},{id:`amber`,label:`Amber`}]}]}} using Authorization and X-Paperclip-Run-Id, then move the issue to `in_review`.",
       `After the answer arrives, if it is Cobalt, publish exactly PAPERCLIP_E2E_QUESTION_DONE_${nonce} once as the complete visible response and mark the task Done.`,
