@@ -89,7 +89,7 @@ fn connection_attempt_deadline(
 }
 
 impl CommandLifecycle {
-    fn for_completed(command: &Command) -> Self {
+    fn for_terminal(command: &Command) -> Self {
         match command.command_type.as_str() {
             "runner.suspend" => Self::Suspend,
             "runner.shutdown" => Self::Shutdown,
@@ -476,10 +476,10 @@ fn process_command<E: CommandExecutor>(
 ) -> Result<(StoredCommandResult, CommandLifecycle), DurableRunnerError> {
     match state.begin_command(command)? {
         CommandDisposition::Replay(result) => {
-            let lifecycle = if result.status == "completed" {
-                CommandLifecycle::for_completed(command)
-            } else {
+            let lifecycle = if result.status == "pending" {
                 CommandLifecycle::Continue
+            } else {
+                CommandLifecycle::for_terminal(command)
             };
             return Ok((result, lifecycle));
         }
@@ -513,7 +513,7 @@ fn process_command<E: CommandExecutor>(
                 }),
             )?;
             store.save(state)?;
-            return Ok((result, CommandLifecycle::Continue));
+            return Ok((result, CommandLifecycle::for_terminal(command)));
         }
     };
     for (event_type, priority, payload) in execution.events {
@@ -521,7 +521,7 @@ fn process_command<E: CommandExecutor>(
     }
     let result = state.complete_command(command, execution.result)?;
     store.save(state)?;
-    Ok((result, CommandLifecycle::for_completed(command)))
+    Ok((result, CommandLifecycle::for_terminal(command)))
 }
 
 fn send_outbox(
@@ -807,9 +807,8 @@ mod tests {
         let mut executor = FailingExecutor { calls: 0 };
         let command = command("session.open");
 
-        let failed = process_command(&mut state, &store, &config, &mut executor, &command)
-            .unwrap()
-            .0;
+        let (failed, failed_lifecycle) =
+            process_command(&mut state, &store, &config, &mut executor, &command).unwrap();
         let (mut recovered, existed) = store.load_or_create(&config).unwrap();
         let replay = process_command(&mut recovered, &store, &config, &mut executor, &command)
             .unwrap()
@@ -817,6 +816,7 @@ mod tests {
 
         assert!(existed);
         assert_eq!(executor.calls, 1);
+        assert_eq!(failed_lifecycle, CommandLifecycle::Continue);
         assert_eq!(failed, replay);
         assert_eq!(failed.status, "failed");
         assert_eq!(failed.result["code"], "command_execution_failed");
@@ -833,6 +833,39 @@ mod tests {
             .iter()
             .all(|diagnostic| !diagnostic.contains("test-secret")));
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn failed_lifecycle_commands_replay_their_terminal_transition() {
+        for (command_type, expected_lifecycle) in [
+            ("runner.suspend", CommandLifecycle::Suspend),
+            ("runner.shutdown", CommandLifecycle::Shutdown),
+        ] {
+            let directory = std::env::temp_dir().join(format!(
+                "paperclip-runner-failed-lifecycle-{}-{}",
+                command_type.replace('.', "-"),
+                std::process::id()
+            ));
+            let _ = fs::remove_dir_all(&directory);
+            let config = config(directory.clone());
+            let store = DurableStateStore::new(&directory).unwrap();
+            let (mut state, _) = store.load_or_create(&config).unwrap();
+            let mut executor = FailingExecutor { calls: 0 };
+            let command = command(command_type);
+
+            let (failed, first_lifecycle) =
+                process_command(&mut state, &store, &config, &mut executor, &command).unwrap();
+            let (mut recovered, _) = store.load_or_create(&config).unwrap();
+            let (replay, replay_lifecycle) =
+                process_command(&mut recovered, &store, &config, &mut executor, &command).unwrap();
+
+            assert_eq!(failed.status, "failed");
+            assert_eq!(failed, replay);
+            assert_eq!(first_lifecycle, expected_lifecycle);
+            assert_eq!(replay_lifecycle, expected_lifecycle);
+            assert_eq!(executor.calls, 1);
+            fs::remove_dir_all(directory).unwrap();
+        }
     }
 
     #[test]
@@ -863,6 +896,35 @@ mod tests {
         assert_eq!(executor.calls, 0);
         assert_eq!(replay.status, "indeterminate");
         assert_eq!(replay.result["code"], "execution_indeterminate");
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn indeterminate_lifecycle_command_still_stops_after_recovery_delivery() {
+        let directory = std::env::temp_dir().join(format!(
+            "paperclip-runner-lifecycle-indeterminate-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&directory);
+        let config = config(directory.clone());
+        let store = DurableStateStore::new(&directory).unwrap();
+        let (mut state, _) = store.load_or_create(&config).unwrap();
+        let command = command("runner.shutdown");
+
+        assert_eq!(
+            state.begin_command(&command).unwrap(),
+            CommandDisposition::Execute
+        );
+        store.save(&state).unwrap();
+
+        let (mut recovered, _) = store.load_or_create(&config).unwrap();
+        let mut executor = CountingExecutor { calls: 0 };
+        let (result, lifecycle) =
+            process_command(&mut recovered, &store, &config, &mut executor, &command).unwrap();
+
+        assert_eq!(result.status, "indeterminate");
+        assert_eq!(lifecycle, CommandLifecycle::Shutdown);
+        assert_eq!(executor.calls, 0);
         fs::remove_dir_all(directory).unwrap();
     }
 
