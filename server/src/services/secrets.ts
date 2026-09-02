@@ -2002,7 +2002,10 @@ export function secretService(db: Db | DbTransaction) {
   // Every `local_encrypted` secret this function creates runs under
   // `withAccountHomeSecretMutationLock`, so its write can never commit inside
   // the window a Codex account-home cleanup already used to decide no secret
-  // claims the directory it is about to delete.
+  // claims the directory it is about to delete. A create queued behind the
+  // lock can still win it after the cleanup already removed that directory,
+  // so check the directory's existence inside the same lock, right before
+  // the write, the same way `create:` and `rotate:` below do.
   async function createManagedLocalSecret(
     companyId: string,
     input: {
@@ -2013,9 +2016,10 @@ export function secretService(db: Db | DbTransaction) {
     },
     actor?: { userId?: string | null; agentId?: string | null },
   ) {
-    return withAccountHomeSecretMutationLock(undefined, companyId, () =>
-      createManagedLocalSecretUnlocked(companyId, input, actor),
-    );
+    return withAccountHomeSecretMutationLock(undefined, companyId, async () => {
+      await assertAccountHomeCacheDirStillValid(undefined, companyId, input.value);
+      return createManagedLocalSecretUnlocked(companyId, input, actor);
+    });
   }
 
   async function createManagedLocalSecretUnlocked(
