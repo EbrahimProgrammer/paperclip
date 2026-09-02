@@ -76,6 +76,13 @@ const mockSecretService = vi.hoisted(() => ({
   // idempotent-repeat-login and secret-creation-failure paths.
   getByName: vi.fn(async (_companyId: string, _name: string) => null as Record<string, unknown> | null),
   create: vi.fn(async (_companyId: string, _input: Record<string, unknown>) => ({ id: "secret-1" })),
+  // The company-wide secret listing the cleanup-safety scan reads. Empty by
+  // default, so a cleanup that finds no other claimant removes the
+  // directory; a test overrides it with a differently named secret to prove
+  // the scan finds a claimant a name-only check would miss.
+  list: vi.fn(
+    async (_companyId: string) => [] as Array<{ id: string; name: string; provider: string }>,
+  ),
   // The pre-existing-secret value check. Defaults to a value that never
   // matches an account home, so a test that leaves this unset and still
   // reaches an existing-secret branch fails loud instead of passing by
@@ -1104,7 +1111,7 @@ describe("adapter device-login routes", () => {
     // true`), but a concurrent login for the same account can still create
     // the company secret before this call's own, unrelated secret-creation
     // attempt fails. The directory now belongs to that other login's secret,
-    // so this call must find the secret and keep the directory.
+    // so the cleanup scan must find it by value and keep the directory.
     const accountHomeDir = await mkdtemp(path.join(os.tmpdir(), "paperclip-codex-account-home-test-"));
     accountHomeTestDirs.push(accountHomeDir);
     mockDeviceLoginPromotion.mockResolvedValueOnce({
@@ -1114,11 +1121,15 @@ describe("adapter device-login routes", () => {
       accountHomeCreated: true,
     });
     mockSecretService.create.mockRejectedValueOnce(new Error("db unavailable"));
-    // The first read (before `create`) finds no secret; the second read
-    // (after the non-conflict failure) finds the concurrent login's secret.
-    mockSecretService.getByName
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({ id: "concurrent-secret" });
+    // The first read (before `create`) finds no secret.
+    mockSecretService.getByName.mockResolvedValueOnce(null);
+    // The cleanup scan lists every company secret and resolves each one's
+    // value. The concurrent login's secret carries this call's own generated
+    // name, so this proves the scan still catches a same-name claimant.
+    mockSecretService.list.mockResolvedValueOnce([
+      { id: "concurrent-secret", name: "CODEX_HOME_acct-concurrent-claim", provider: "local_encrypted" },
+    ]);
+    mockSecretService.resolveSecretValueForDeviceLoginCheck.mockResolvedValueOnce(accountHomeDir);
     const app = await createApp();
 
     const start = await request(app)
@@ -1135,6 +1146,86 @@ describe("adapter device-login routes", () => {
     });
 
     await expect(lstat(accountHomeDir)).resolves.toBeDefined();
+  });
+
+  it("does not remove an account home a differently named secret still references", async () => {
+    // A user can bind a hand-named secret to an account home directly, with
+    // no relation to the generated `CODEX_HOME_<handle>` name. A cleanup that
+    // checks only the generated name would miss this secret and delete a
+    // directory it still needs; the scan must catch it by value instead.
+    const accountHomeDir = await mkdtemp(path.join(os.tmpdir(), "paperclip-codex-account-home-test-"));
+    accountHomeTestDirs.push(accountHomeDir);
+    mockDeviceLoginPromotion.mockResolvedValueOnce({
+      outcome: "promoted",
+      accountId: "acct-aliased",
+      accountHomeDir,
+      accountHomeCreated: true,
+    });
+    mockSecretService.create.mockRejectedValueOnce(new Error("db unavailable"));
+    mockSecretService.getByName.mockResolvedValueOnce(null);
+    mockSecretService.list.mockResolvedValueOnce([
+      // An unrelated secret that resolves to a different value. The scan
+      // must not stop at the first entry and must not treat every secret as
+      // a match.
+      { id: "unrelated-secret", name: "SOME_OTHER_SECRET", provider: "local_encrypted" },
+      { id: "hand-named-secret", name: "MY_CODEX_HOME", provider: "local_encrypted" },
+    ]);
+    mockSecretService.resolveSecretValueForDeviceLoginCheck.mockImplementation(
+      async (_companyId: string, secretId: string, _context: { configPath: string }) =>
+        secretId === "hand-named-secret" ? accountHomeDir : "/some/unrelated/path",
+    );
+    const app = await createApp();
+
+    const start = await request(app)
+      .post(loginPath(COMPANY_1))
+      .send({ environmentId: SANDBOX_ENV_1 });
+    expect(start.status, JSON.stringify(start.body)).toBe(201);
+    const sessionId = start.body.sessionId as string;
+
+    harness.releaseGate();
+    await vi.waitFor(async () => {
+      const status = await request(app).get(`${loginPath(COMPANY_1)}/${sessionId}`);
+      expect(status.body.status).toBe("failed");
+      expect(status.body.failure?.reason).toBe("promotion_failed");
+    });
+
+    await expect(lstat(accountHomeDir)).resolves.toBeDefined();
+  });
+
+  it("removes the account home when the cleanup scan finds no claimant", async () => {
+    // No secret, under any name, resolves to this directory, so the cleanup
+    // must still remove it — the broader scan must not make cleanup any less
+    // eager than the old name-only check when nothing claims the directory.
+    const accountHomeDir = await mkdtemp(path.join(os.tmpdir(), "paperclip-codex-account-home-test-"));
+    accountHomeTestDirs.push(accountHomeDir);
+    mockDeviceLoginPromotion.mockResolvedValueOnce({
+      outcome: "promoted",
+      accountId: "acct-unclaimed",
+      accountHomeDir,
+      accountHomeCreated: true,
+    });
+    mockSecretService.create.mockRejectedValueOnce(new Error("db unavailable"));
+    mockSecretService.getByName.mockResolvedValueOnce(null);
+    mockSecretService.list.mockResolvedValueOnce([
+      { id: "unrelated-secret", name: "SOME_OTHER_SECRET", provider: "local_encrypted" },
+    ]);
+    mockSecretService.resolveSecretValueForDeviceLoginCheck.mockResolvedValueOnce("/some/unrelated/path");
+    const app = await createApp();
+
+    const start = await request(app)
+      .post(loginPath(COMPANY_1))
+      .send({ environmentId: SANDBOX_ENV_1 });
+    expect(start.status, JSON.stringify(start.body)).toBe(201);
+    const sessionId = start.body.sessionId as string;
+
+    harness.releaseGate();
+    await vi.waitFor(async () => {
+      const status = await request(app).get(`${loginPath(COMPANY_1)}/${sessionId}`);
+      expect(status.body.status).toBe("failed");
+      expect(status.body.failure?.reason).toBe("promotion_failed");
+    });
+
+    await expect(lstat(accountHomeDir)).rejects.toThrow();
   });
 
   it("fails closed when the account identifier cannot form a valid account home name", async () => {

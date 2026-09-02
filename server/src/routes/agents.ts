@@ -291,6 +291,39 @@ async function assertAccountHomeSecretMatches(
   }
 }
 
+// Confirms no company secret, under any name, still names this account home
+// before a failed promotion deletes the directory. The generated
+// `CODEX_HOME_<handle>` name is not the only secret that can reference this
+// directory: a user can bind a hand-named secret to the same account home, so
+// a check that reads only the generated name misses that secret and deletes
+// a directory it still needs. A bound agent then reads a `CODEX_HOME` value
+// that points at nothing. Only a `local_encrypted` secret can hold a literal
+// directory path, so the scan skips every other provider.
+async function anySecretNamesAccountHome(
+  secretsSvc: {
+    list: (companyId: string) => Promise<Array<{ id: string; name: string; provider: string }>>;
+    resolveSecretValueForDeviceLoginCheck: (
+      companyId: string,
+      secretId: string,
+      context: { configPath: string },
+    ) => Promise<string>;
+  },
+  companyId: string,
+  accountHomeDir: string,
+): Promise<boolean> {
+  const secrets = await secretsSvc.list(companyId);
+  for (const secret of secrets) {
+    if (secret.provider !== "local_encrypted") continue;
+    const storedValue = await secretsSvc
+      .resolveSecretValueForDeviceLoginCheck(companyId, secret.id, {
+        configPath: `secrets.${secret.name}`,
+      })
+      .catch(() => null);
+    if (storedValue === accountHomeDir) return true;
+  }
+  return false;
+}
+
 export function agentRoutes(
   db: Db,
   options: {
@@ -700,17 +733,21 @@ export function agentRoutes(
               }
               // The account home write failed for a reason other than a naming
               // conflict. Remove the directory only when this exact login created
-              // it AND no secret now names it. The lock around this whole method
-              // already rules out another SAME-ACCOUNT LOGIN from being mid-sequence
-              // here, but it does not rule out a secret a different path (for
-              // example, a user who names a secret by hand) created at this exact
-              // name in between the read above and this failure. The re-check is
-              // this call's only signal for that case, so it stays even under the
-              // lock: `accountHomeCreated` alone is not proof no such secret now
-              // claims the directory.
+              // it AND no secret, under any name, still names it. The lock
+              // around this whole method already rules out another
+              // SAME-ACCOUNT LOGIN from being mid-sequence here, but it does
+              // not rule out a secret a different path created at this exact
+              // directory in between the read above and this failure — for
+              // example, a concurrent login for the same account that won a
+              // race on this exact name, or a user who names a secret by hand
+              // under a different name entirely. The re-check is this call's
+              // only signal for that case, so it stays even under the lock:
+              // `accountHomeCreated` alone is not proof no such secret now
+              // claims the directory, and a same-name check alone is not proof
+              // either, because the claiming secret can carry any name.
               if (result.accountHomeCreated) {
-                const claimedByAnotherWriter = await secretsSvc.getByName(context.companyId, secretName);
-                if (!claimedByAnotherWriter) {
+                const claimed = await anySecretNamesAccountHome(secretsSvc, context.companyId, accountHomeDir);
+                if (!claimed) {
                   await rm(accountHomeDir, { recursive: true, force: true }).catch(() => undefined);
                 }
               }
