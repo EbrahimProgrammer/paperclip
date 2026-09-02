@@ -172,6 +172,7 @@ import { DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX } from "@paperclipai/a
 import {
   checkStagedCredentialReadiness,
   promoteDeviceLoginCredential,
+  withCodexAccountHomePromotionLock,
 } from "@paperclipai/adapter-codex-local/server";
 import {
   checkStagedGrokCredentialReadiness,
@@ -594,118 +595,130 @@ export function agentRoutes(
     // promotion function.
     promotionByAdapterType: {
       codex_local: {
+        // Hold one lock across the whole promotion sequence below: the
+        // credential write, the existing-secret check, the secret create, and
+        // the cleanup a create failure can trigger. Two different logins for
+        // the SAME Codex account run this whole sequence one at a time, so a
+        // login can never decide to delete the shared account-home directory
+        // while another login's own sequence is still mid-way through writing
+        // its credential or binding its own secret to that same directory. A
+        // lock around only the directory-creation step is not enough: that
+        // lock is already released by the time a login reaches the secret
+        // bind, so a second login can write its credential and be about to
+        // bind its own secret while the first login's later, unrelated
+        // secret-write failure removes the directory both logins now share.
         async promote(authBytes, context) {
-          // Hold the promotion critical-section lock across the ownership check and
-          // the credential write. The reaper takes the same lock before it reclaims
-          // a stale `promoting` row. So a reclaim never interleaves with a live
-          // write: the reaper either wins the lock first and the ownership check
-          // then reads a reclaimed row and writes nothing, or the write finishes
-          // first under the lock and the reaper reclaims only after it completes. A
-          // read-only fence is not enough, because the filesystem write can start
-          // after the fence; the lock spans the whole section.
-          const result = await adapterLoginStore.withCompanyAdapterPromotionLock(
-            context.companyId,
-            context.startedByUserId,
-            context.adapterType,
-            () =>
-              promoteDeviceLoginCredential({
-                authBytes,
-                companyId: context.companyId,
-                userInitiated: true,
-                checkReadiness: (bytes) => checkStagedCredentialReadiness(bytes),
-                isSoleActiveOwner: async () => {
-                  // The partial unique index allows one active row per company and
-                  // adapter. So a `promoting` row for this session is the sole
-                  // active owner of the company credential slot. The read runs
-                  // inside the lock, so it observes a reaper reclaim that committed
-                  // before this section acquired the lock.
-                  const row = await adapterLoginStore.get(context.sessionId);
-                  return row?.status === "promoting" && row.companyId === context.companyId;
-                },
-                log: (line) => {
-                  // The promotion lines carry no token bytes and no raw account id,
-                  // so it is safe to log them with the session identifier.
-                  logger.info({ sessionId: context.sessionId }, line);
-                },
-              }),
-          );
-          // A resolved promotion is not necessarily an accepted promotion. In
-          // particular, a reaper/expiry race can revoke this session's sole
-          // ownership between the service transition and Decision H. Fail closed:
-          // only a credential write or a deliberate safe keep can authenticate.
-          if (result.outcome !== "promoted" && result.outcome !== "kept") {
-            throw new Error(`device-login credential promotion rejected: ${result.outcome}`);
-          }
-          // The account's own home is durable at this point (the promotion above
-          // wrote it fail-loud). Name it with a company secret, so any agent can
-          // bind to it. Reading the secret by name first keeps a repeat login for
-          // the same account idempotent: `create` throws a conflict when the name
-          // already exists.
-          const handle = result.accountId ? toAccountHandle(result.accountId) : null;
-          if (!handle || !result.accountHomeDir) {
-            throw new Error(
-              "device-login credential promotion rejected: the promotion carried no account home",
-            );
-          }
-          const secretName = `CODEX_HOME_${handle}`;
-          const accountHomeDir = result.accountHomeDir;
-          const existingSecret = await secretsSvc.getByName(context.companyId, secretName);
-          if (existingSecret) {
-            // A same-name secret already exists. Confirm it still names this
-            // account's own home before treating a repeat login as a success:
-            // the name alone is not proof of a match.
-            await assertAccountHomeSecretMatches(secretsSvc, context.companyId, existingSecret, secretName, accountHomeDir);
-            return;
-          }
-          try {
-            await secretsSvc.create(
+          return withCodexAccountHomePromotionLock(undefined, context.companyId, async () => {
+            // Hold the promotion critical-section lock across the ownership check
+            // and the credential write. The reaper takes the same lock before it
+            // reclaims a stale `promoting` row. So a reclaim never interleaves with
+            // a live write: the reaper either wins the lock first and the
+            // ownership check then reads a reclaimed row and writes nothing, or
+            // the write finishes first under the lock and the reaper reclaims only
+            // after it completes. A read-only fence is not enough, because the
+            // filesystem write can start after the fence; the lock spans the whole
+            // section.
+            const result = await adapterLoginStore.withCompanyAdapterPromotionLock(
               context.companyId,
-              {
-                name: secretName,
-                provider: "local_encrypted",
-                value: accountHomeDir,
-                description: `CODEX_HOME generated by logging into account ${handle}`,
-              },
-              { userId: context.startedByUserId, agentId: null },
+              context.startedByUserId,
+              context.adapterType,
+              () =>
+                promoteDeviceLoginCredential({
+                  authBytes,
+                  companyId: context.companyId,
+                  userInitiated: true,
+                  checkReadiness: (bytes) => checkStagedCredentialReadiness(bytes),
+                  isSoleActiveOwner: async () => {
+                    // The partial unique index allows one active row per company and
+                    // adapter. So a `promoting` row for this session is the sole
+                    // active owner of the company credential slot. The read runs
+                    // inside the lock, so it observes a reaper reclaim that committed
+                    // before this section acquired the lock.
+                    const row = await adapterLoginStore.get(context.sessionId);
+                    return row?.status === "promoting" && row.companyId === context.companyId;
+                  },
+                  log: (line) => {
+                    // The promotion lines carry no token bytes and no raw account id,
+                    // so it is safe to log them with the session identifier.
+                    logger.info({ sessionId: context.sessionId }, line);
+                  },
+                }),
             );
-          } catch (err) {
-            if (err instanceof HttpError && err.status === 409) {
-              // A conflict means a concurrent login for the same account won the
-              // create race. Confirm the winning secret still names this
-              // account's own home before treating the race as a successful,
-              // idempotent login.
-              const winningSecret = await secretsSvc.getByName(context.companyId, secretName);
-              if (!winningSecret) {
-                throw new Error(
-                  `device-login credential promotion rejected: the ${secretName} secret conflict could not be resolved`,
-                );
-              }
-              await assertAccountHomeSecretMatches(secretsSvc, context.companyId, winningSecret, secretName, accountHomeDir);
+            // A resolved promotion is not necessarily an accepted promotion. In
+            // particular, a reaper/expiry race can revoke this session's sole
+            // ownership between the service transition and Decision H. Fail closed:
+            // only a credential write or a deliberate safe keep can authenticate.
+            if (result.outcome !== "promoted" && result.outcome !== "kept") {
+              throw new Error(`device-login credential promotion rejected: ${result.outcome}`);
+            }
+            // The account's own home is durable at this point (the promotion above
+            // wrote it fail-loud). Name it with a company secret, so any agent can
+            // bind to it. Reading the secret by name first keeps a repeat login for
+            // the same account idempotent: `create` throws a conflict when the name
+            // already exists.
+            const handle = result.accountId ? toAccountHandle(result.accountId) : null;
+            if (!handle || !result.accountHomeDir) {
+              throw new Error(
+                "device-login credential promotion rejected: the promotion carried no account home",
+              );
+            }
+            const secretName = `CODEX_HOME_${handle}`;
+            const accountHomeDir = result.accountHomeDir;
+            const existingSecret = await secretsSvc.getByName(context.companyId, secretName);
+            if (existingSecret) {
+              // A same-name secret already exists. Confirm it still names this
+              // account's own home before treating a repeat login as a success:
+              // the name alone is not proof of a match.
+              await assertAccountHomeSecretMatches(secretsSvc, context.companyId, existingSecret, secretName, accountHomeDir);
               return;
             }
-            // The account home write failed for a reason other than a naming
-            // conflict. Remove the directory only when this exact login created
-            // it AND no secret now names it. `accountHomeCreated` alone is not
-            // proof this login is the only login that used the directory: a
-            // concurrent login for the same account can create the secret
-            // between this call's directory write and this failure, so a
-            // secret existing at this name now means some login already
-            // claimed the home and this call must keep it. The absence of a
-            // secret is also not proof this login created the directory in
-            // every case: a user can delete the secret and keep the account
-            // home, so removing it here on every failure could
-            // delete a working credential from an earlier login. A later retry
-            // recreates the directory when this login did create it.
-            if (result.accountHomeCreated) {
-              const claimedByAnotherLogin = await secretsSvc.getByName(context.companyId, secretName);
-              if (!claimedByAnotherLogin) {
-                await rm(accountHomeDir, { recursive: true, force: true }).catch(() => undefined);
+            try {
+              await secretsSvc.create(
+                context.companyId,
+                {
+                  name: secretName,
+                  provider: "local_encrypted",
+                  value: accountHomeDir,
+                  description: `CODEX_HOME generated by logging into account ${handle}`,
+                },
+                { userId: context.startedByUserId, agentId: null },
+              );
+            } catch (err) {
+              if (err instanceof HttpError && err.status === 409) {
+                // A conflict means a concurrent login for the same account won the
+                // create race. Confirm the winning secret still names this
+                // account's own home before treating the race as a successful,
+                // idempotent login.
+                const winningSecret = await secretsSvc.getByName(context.companyId, secretName);
+                if (!winningSecret) {
+                  throw new Error(
+                    `device-login credential promotion rejected: the ${secretName} secret conflict could not be resolved`,
+                  );
+                }
+                await assertAccountHomeSecretMatches(secretsSvc, context.companyId, winningSecret, secretName, accountHomeDir);
+                return;
               }
+              // The account home write failed for a reason other than a naming
+              // conflict. Remove the directory only when this exact login created
+              // it AND no secret now names it. The lock around this whole method
+              // already rules out another SAME-ACCOUNT LOGIN from being mid-sequence
+              // here, but it does not rule out a secret a different path (for
+              // example, a user who names a secret by hand) created at this exact
+              // name in between the read above and this failure. The re-check is
+              // this call's only signal for that case, so it stays even under the
+              // lock: `accountHomeCreated` alone is not proof no such secret now
+              // claims the directory.
+              if (result.accountHomeCreated) {
+                const claimedByAnotherWriter = await secretsSvc.getByName(context.companyId, secretName);
+                if (!claimedByAnotherWriter) {
+                  await rm(accountHomeDir, { recursive: true, force: true }).catch(() => undefined);
+                }
+              }
+              throw new Error(
+                "device-login credential promotion rejected: failed to record the account home secret",
+              );
             }
-            throw new Error(
-              "device-login credential promotion rejected: failed to record the account home secret",
-            );
-          }
+          });
         },
       },
       grok_local: {

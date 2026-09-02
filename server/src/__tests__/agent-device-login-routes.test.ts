@@ -775,6 +775,22 @@ describe("adapter device-login routes", () => {
     expect(second.body.sessionId).not.toBe(first.body.sessionId);
     // Each owner's start acquires its own lease.
     expect(harness.acquisitions).toHaveLength(2);
+    // Drain both sessions to a terminal status before the test ends. Neither
+    // session's promotion has run yet (both still wait on the gate), so an
+    // undrained session keeps running after this test returns and can consume
+    // a later test's own mocked promotion result. A status read is owner
+    // scoped, so read each session back as the owner that started it.
+    harness.releaseGate();
+    await vi.waitFor(async () => {
+      currentActor = boardActor(OWNER_A);
+      const firstStatus = await request(app).get(`${loginPath(COMPANY_1)}/${first.body.sessionId}`);
+      expect(firstStatus.body.status).toBe("authenticated");
+    });
+    await vi.waitFor(async () => {
+      currentActor = boardActor(OWNER_B);
+      const secondStatus = await request(app).get(`${loginPath(COMPANY_1)}/${second.body.sessionId}`);
+      expect(secondStatus.body.status).toBe("authenticated");
+    });
   });
 
   it("returns 409 for a second active start in a different environment", async () => {
@@ -792,6 +808,14 @@ describe("adapter device-login routes", () => {
       .send({ environmentId: SANDBOX_ENV_2 });
     expect(second.status, JSON.stringify(second.body)).toBe(409);
     expect(harness.acquisitions).toHaveLength(1);
+    // Drain the first session to a terminal status before the test ends. An
+    // undrained session keeps running after this test returns and can consume
+    // a later test's own mocked promotion result.
+    harness.releaseGate();
+    await vi.waitFor(async () => {
+      const status = await request(app).get(`${loginPath(COMPANY_1)}/${first.body.sessionId}`);
+      expect(status.body.status).toBe("authenticated");
+    });
   });
 
   it("fails closed when promotion loses the sole-owner claim", async () => {

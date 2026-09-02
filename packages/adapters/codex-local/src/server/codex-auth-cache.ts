@@ -227,6 +227,57 @@ export async function ensureCodexAuthCacheEntryDirExclusive(
 }
 
 /**
+ * Resolves a per-company lock target directory for
+ * {@link withCodexAccountHomePromotionLock}. This is a directory of its own,
+ * separate from the cache root {@link resolveCodexAuthCacheDir} resolves, so
+ * the two locks never share a lock key and a caller that holds this lock can
+ * still call {@link ensureCodexAuthCacheEntryDirExclusive} (which locks the
+ * cache root) without nesting a lock inside itself.
+ */
+function resolveCodexAuthCachePromotionLockDir(
+  env: NodeJS.ProcessEnv = process.env,
+  companyId: string,
+): string {
+  const safeCompanyId = toSafePathSegment(companyId, "companyId");
+  const instanceRoot = resolvePaperclipInstanceRootForAdapter({
+    homeDir: nonEmpty(env.PAPERCLIP_HOME) ?? undefined,
+    instanceId: nonEmpty(env.PAPERCLIP_INSTANCE_ID) ?? undefined,
+    env,
+  });
+  return path.resolve(instanceRoot, "companies", safeCompanyId, "codex-auth-cache-promotion-lock");
+}
+
+/**
+ * Serializes one company's whole device-login promotion sequence: the
+ * account-home directory create-or-reuse decision, the credential write, and
+ * the secret bind or cleanup that follows. Two different logins for the SAME
+ * Codex account run this sequence one at a time under this lock, so no login
+ * can decide to delete the shared account-home directory while another
+ * login's flow is still mid-way through writing its credential or binding
+ * its own secret to that same directory.
+ *
+ * `ensureCodexAuthCacheEntryDirExclusive` alone is not enough: it locks only
+ * the short directory-creation step, so its lock is already released by the
+ * time a login reaches the secret bind. A second login can then write its
+ * credential and be about to bind its own secret while the first login's
+ * later, unrelated secret-write failure decides to remove the directory both
+ * logins now share, deleting a credential home the second login still needs.
+ * Holding this lock across the full sequence for every login closes that
+ * window: a login that must clean up its own directory always finishes that
+ * cleanup, including the directory-recreation of any later login that lands
+ * on the now-empty slot, before the next login's sequence starts.
+ */
+export async function withCodexAccountHomePromotionLock<T>(
+  env: NodeJS.ProcessEnv = process.env,
+  companyId: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const lockDir = resolveCodexAuthCachePromotionLockDir(env, companyId);
+  await ensurePrivateDir(lockDir);
+  return withDirectoryMergeLock(lockDir, fn, env);
+}
+
+/**
  * Reads the usable subscription `account_id` from an `auth.json` payload. Returns
  * `null` for an absent, unusable, or api-key credential (no subscription
  * identity). This mirrors `parseAuth` in `codex-auth-merge-decision.cjs`; keep

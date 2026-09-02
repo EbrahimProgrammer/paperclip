@@ -12,6 +12,7 @@ import {
   resolveCodexAuthCacheEntryPath,
   selectVendCredential,
   toCacheKey,
+  withCodexAccountHomePromotionLock,
 } from "./codex-auth-cache.js";
 import { resolveSharedCodexHomeDir } from "./codex-home.js";
 
@@ -344,6 +345,84 @@ describe("codex auth cache store", () => {
       expect(isCodexAuthCacheEnabled({ PAPERCLIP_CODEX_AUTH_CACHE: "false" })).toBe(false);
       expect(isCodexAuthCacheEnabled({ PAPERCLIP_CODEX_AUTH_CACHE: "off" })).toBe(false);
       expect(isCodexAuthCacheEnabled({ PAPERCLIP_CODEX_AUTH_CACHE: "no" })).toBe(false);
+    });
+  });
+
+  describe("Phase 6: whole-promotion serialization for one company", () => {
+    it("withCodexAccountHomePromotionLock never overlaps two concurrent callers for the same company", async () => {
+      // The device-login route holds this lock across its whole promotion
+      // sequence: the account-home directory decision, the credential write,
+      // and the secret bind or cleanup that follows. Two different logins for
+      // the SAME Codex account must run that whole sequence one at a time, so
+      // a login can never delete the shared account-home directory while
+      // another login's own sequence is still writing its credential or
+      // binding its own secret to that same directory. This proves the lock
+      // itself enforces that: two concurrent callers for one company never run
+      // their callbacks at the same time, whichever caller goes first.
+      const home = await makeInstanceRoot();
+      const env = envFor(home);
+      const events: string[] = [];
+      let releaseFirstCaller!: () => void;
+      const firstCallerGate = new Promise<void>((resolve) => {
+        releaseFirstCaller = resolve;
+      });
+
+      const firstCall = withCodexAccountHomePromotionLock(env, "company-shared", async () => {
+        events.push("first-enter");
+        await firstCallerGate;
+        events.push("first-exit");
+        return "first";
+      });
+      // Give the first caller a chance to acquire the lock and enter its
+      // callback before the second caller starts racing for the same lock.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const secondCall = withCodexAccountHomePromotionLock(env, "company-shared", async () => {
+        events.push("second-enter");
+        events.push("second-exit");
+        return "second";
+      });
+      // The second caller must stay blocked on the lock while the first
+      // caller still holds it: it must never log `second-enter` before the
+      // first caller's `first-exit`.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(events).toEqual(["first-enter"]);
+
+      releaseFirstCaller();
+      const [first, second] = await Promise.all([firstCall, secondCall]);
+      expect(first).toBe("first");
+      expect(second).toBe("second");
+      expect(events).toEqual(["first-enter", "first-exit", "second-enter", "second-exit"]);
+    });
+
+    it("withCodexAccountHomePromotionLock keeps two different companies independent", async () => {
+      // The lock is per company, so two different companies' device logins
+      // never wait on each other.
+      const home = await makeInstanceRoot();
+      const env = envFor(home);
+      const events: string[] = [];
+      let releaseCompanyA!: () => void;
+      const companyAGate = new Promise<void>((resolve) => {
+        releaseCompanyA = resolve;
+      });
+
+      const companyACall = withCodexAccountHomePromotionLock(env, "company-a", async () => {
+        events.push("a-enter");
+        await companyAGate;
+        events.push("a-exit");
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const companyBCall = withCodexAccountHomePromotionLock(env, "company-b", async () => {
+        events.push("b-enter");
+        events.push("b-exit");
+      });
+      await companyBCall;
+      // Company B's callback ran and finished while company A's callback was
+      // still waiting on its own gate, so the two locks never contended.
+      expect(events).toEqual(["a-enter", "b-enter", "b-exit"]);
+
+      releaseCompanyA();
+      await companyACall;
+      expect(events).toEqual(["a-enter", "b-enter", "b-exit", "a-exit"]);
     });
   });
 });
