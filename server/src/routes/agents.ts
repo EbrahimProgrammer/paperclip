@@ -306,6 +306,19 @@ async function assertAccountHomeSecretMatches(
 // delete a directory a secret still needs. So the scan fails closed: any
 // resolution failure makes the whole scan report a claim, even when every
 // secret that DID resolve named a different directory.
+//
+// The scan lists every secret once, then resolves each secret's value in
+// turn, and each resolve call is its own round trip. A new secret can enter
+// the company between the initial list and the last resolve call, so a
+// single pass can finish, find no claimant among the secrets it read, and
+// still miss a secret that named this directory moments later. So the scan
+// re-lists after every pass and resolves only the secrets it has not yet
+// checked, and it only reports "no claimant" once a pass finds nothing new
+// to check. A scan that keeps finding new secrets on every pass fails
+// closed after a bounded number of passes, so a fast stream of concurrent
+// secret creation cannot force an unsafe delete.
+const ACCOUNT_HOME_CLAIM_SCAN_MAX_PASSES = 5;
+
 async function anySecretNamesAccountHome(
   secretsSvc: {
     list: (companyId: string) => Promise<Array<{ id: string; name: string; provider: string }>>;
@@ -318,21 +331,31 @@ async function anySecretNamesAccountHome(
   companyId: string,
   accountHomeDir: string,
 ): Promise<boolean> {
-  const secrets = await secretsSvc.list(companyId);
-  let resolutionFailed = false;
-  for (const secret of secrets) {
-    if (secret.provider !== "local_encrypted") continue;
-    const storedValue = await secretsSvc
-      .resolveSecretValueForDeviceLoginCheck(companyId, secret.id, {
-        configPath: `secrets.${secret.name}`,
-      })
-      .catch(() => {
-        resolutionFailed = true;
-        return null;
-      });
-    if (storedValue === accountHomeDir) return true;
+  const checkedSecretIds = new Set<string>();
+  for (let pass = 0; pass < ACCOUNT_HOME_CLAIM_SCAN_MAX_PASSES; pass += 1) {
+    const secrets = await secretsSvc.list(companyId);
+    const uncheckedSecrets = secrets.filter((secret) => !checkedSecretIds.has(secret.id));
+    if (uncheckedSecrets.length === 0) return false;
+    let resolutionFailed = false;
+    for (const secret of uncheckedSecrets) {
+      checkedSecretIds.add(secret.id);
+      if (secret.provider !== "local_encrypted") continue;
+      const storedValue = await secretsSvc
+        .resolveSecretValueForDeviceLoginCheck(companyId, secret.id, {
+          configPath: `secrets.${secret.name}`,
+        })
+        .catch(() => {
+          resolutionFailed = true;
+          return null;
+        });
+      if (storedValue === accountHomeDir) return true;
+    }
+    if (resolutionFailed) return true;
   }
-  return resolutionFailed;
+  // Every pass found a secret it had not yet checked. Fail closed: an
+  // endless stream of new secrets is not proof that none of them claims
+  // this directory.
+  return true;
 }
 
 export function agentRoutes(

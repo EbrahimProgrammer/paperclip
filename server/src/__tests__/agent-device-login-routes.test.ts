@@ -1272,6 +1272,52 @@ describe("adapter device-login routes", () => {
     await expect(lstat(accountHomeDir)).resolves.toBeDefined();
   });
 
+  it("preserves the account home when a secret appears after the scan starts", async () => {
+    // The scan lists secrets once, then resolves each one in turn. A new
+    // secret can appear after that first list call, while the scan is still
+    // resolving an earlier secret. The scan must re-list and check that new
+    // secret too, instead of trusting its first, now-stale list.
+    const accountHomeDir = await mkdtemp(path.join(os.tmpdir(), "paperclip-codex-account-home-test-"));
+    accountHomeTestDirs.push(accountHomeDir);
+    mockDeviceLoginPromotion.mockResolvedValueOnce({
+      outcome: "promoted",
+      accountId: "acct-late-claim",
+      accountHomeDir,
+      accountHomeCreated: true,
+    });
+    mockSecretService.create.mockRejectedValueOnce(new Error("db unavailable"));
+    mockSecretService.getByName.mockResolvedValueOnce(null);
+    // The first pass sees only the unrelated secret. By the time the scan
+    // re-lists, a second, differently named secret now names this account
+    // home; the scan must catch it on that later pass.
+    mockSecretService.list
+      .mockResolvedValueOnce([{ id: "unrelated-secret", name: "SOME_OTHER_SECRET", provider: "local_encrypted" }])
+      .mockResolvedValueOnce([
+        { id: "unrelated-secret", name: "SOME_OTHER_SECRET", provider: "local_encrypted" },
+        { id: "late-secret", name: "LATE_CODEX_HOME", provider: "local_encrypted" },
+      ]);
+    mockSecretService.resolveSecretValueForDeviceLoginCheck.mockImplementation(
+      async (_companyId: string, secretId: string, _context: { configPath: string }) =>
+        secretId === "late-secret" ? accountHomeDir : "/some/unrelated/path",
+    );
+    const app = await createApp();
+
+    const start = await request(app)
+      .post(loginPath(COMPANY_1))
+      .send({ environmentId: SANDBOX_ENV_1 });
+    expect(start.status, JSON.stringify(start.body)).toBe(201);
+    const sessionId = start.body.sessionId as string;
+
+    harness.releaseGate();
+    await vi.waitFor(async () => {
+      const status = await request(app).get(`${loginPath(COMPANY_1)}/${sessionId}`);
+      expect(status.body.status).toBe("failed");
+      expect(status.body.failure?.reason).toBe("promotion_failed");
+    });
+
+    await expect(lstat(accountHomeDir)).resolves.toBeDefined();
+  });
+
   it("fails closed when the account identifier cannot form a valid account home name", async () => {
     // The promotion helper itself already rejects an identifier that cannot
     // become an account handle; a defensive re-check in the route covers a
