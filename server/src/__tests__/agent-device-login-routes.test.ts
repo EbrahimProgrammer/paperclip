@@ -1228,6 +1228,50 @@ describe("adapter device-login routes", () => {
     await expect(lstat(accountHomeDir)).rejects.toThrow();
   });
 
+  it("preserves the account home when the cleanup scan cannot resolve a secret's value", async () => {
+    // A resolve failure on one secret is not proof that secret names a
+    // different directory: the failure can hit the exact secret that would
+    // have matched. The cleanup must keep the directory rather than treat an
+    // unresolved secret as a non-match, even when every secret that DID
+    // resolve named a different directory.
+    const accountHomeDir = await mkdtemp(path.join(os.tmpdir(), "paperclip-codex-account-home-test-"));
+    accountHomeTestDirs.push(accountHomeDir);
+    mockDeviceLoginPromotion.mockResolvedValueOnce({
+      outcome: "promoted",
+      accountId: "acct-unresolvable",
+      accountHomeDir,
+      accountHomeCreated: true,
+    });
+    mockSecretService.create.mockRejectedValueOnce(new Error("db unavailable"));
+    mockSecretService.getByName.mockResolvedValueOnce(null);
+    mockSecretService.list.mockResolvedValueOnce([
+      { id: "unrelated-secret", name: "SOME_OTHER_SECRET", provider: "local_encrypted" },
+      { id: "unresolvable-secret", name: "MAYBE_CODEX_HOME", provider: "local_encrypted" },
+    ]);
+    mockSecretService.resolveSecretValueForDeviceLoginCheck.mockImplementation(
+      async (_companyId: string, secretId: string, _context: { configPath: string }) => {
+        if (secretId === "unresolvable-secret") throw new Error("decryption key unavailable");
+        return "/some/unrelated/path";
+      },
+    );
+    const app = await createApp();
+
+    const start = await request(app)
+      .post(loginPath(COMPANY_1))
+      .send({ environmentId: SANDBOX_ENV_1 });
+    expect(start.status, JSON.stringify(start.body)).toBe(201);
+    const sessionId = start.body.sessionId as string;
+
+    harness.releaseGate();
+    await vi.waitFor(async () => {
+      const status = await request(app).get(`${loginPath(COMPANY_1)}/${sessionId}`);
+      expect(status.body.status).toBe("failed");
+      expect(status.body.failure?.reason).toBe("promotion_failed");
+    });
+
+    await expect(lstat(accountHomeDir)).resolves.toBeDefined();
+  });
+
   it("fails closed when the account identifier cannot form a valid account home name", async () => {
     // The promotion helper itself already rejects an identifier that cannot
     // become an account handle; a defensive re-check in the route covers a

@@ -299,6 +299,13 @@ async function assertAccountHomeSecretMatches(
 // a directory it still needs. A bound agent then reads a `CODEX_HOME` value
 // that points at nothing. Only a `local_encrypted` secret can hold a literal
 // directory path, so the scan skips every other provider.
+//
+// A secret whose value fails to resolve is NOT proof that secret names a
+// different directory: the resolve call can fail for a secret that would
+// have matched. Treating that failure as a non-match would let the cleanup
+// delete a directory a secret still needs. So the scan fails closed: any
+// resolution failure makes the whole scan report a claim, even when every
+// secret that DID resolve named a different directory.
 async function anySecretNamesAccountHome(
   secretsSvc: {
     list: (companyId: string) => Promise<Array<{ id: string; name: string; provider: string }>>;
@@ -312,16 +319,20 @@ async function anySecretNamesAccountHome(
   accountHomeDir: string,
 ): Promise<boolean> {
   const secrets = await secretsSvc.list(companyId);
+  let resolutionFailed = false;
   for (const secret of secrets) {
     if (secret.provider !== "local_encrypted") continue;
     const storedValue = await secretsSvc
       .resolveSecretValueForDeviceLoginCheck(companyId, secret.id, {
         configPath: `secrets.${secret.name}`,
       })
-      .catch(() => null);
+      .catch(() => {
+        resolutionFailed = true;
+        return null;
+      });
     if (storedValue === accountHomeDir) return true;
   }
-  return false;
+  return resolutionFailed;
 }
 
 export function agentRoutes(
