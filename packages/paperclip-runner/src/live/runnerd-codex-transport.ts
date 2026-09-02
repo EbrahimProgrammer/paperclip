@@ -1166,6 +1166,7 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
   #providerIdentity: Record<string, unknown> | null = null;
   #turnId = "";
   #turnStartResponsePending = false;
+  #turnStartNotificationQueued = false;
   #durableTurnId = "";
   #authorizedTools: Record<string, unknown> | null = null;
   #closed = false;
@@ -2172,6 +2173,7 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
       .join("\n");
     const pendingTurnId = `turn_lab_${randomUUID().replaceAll("-", "")}`;
     this.#turnId = pendingTurnId;
+    this.#turnStartNotificationQueued = false;
     this.#turnStartResponsePending = true;
     try {
       await this.#command("turn.start", { text: message });
@@ -2192,6 +2194,7 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
       return { turn: { id: this.#turnId, status: "inProgress" } };
     } finally {
       this.#turnStartResponsePending = false;
+      this.#turnStartNotificationQueued = false;
     }
   }
 
@@ -2289,6 +2292,12 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
 
   #pumpEvents(): void {
     this.#flushPendingTraceRehydrations();
+    // An interval pump can run again while turn/start is still awaiting its
+    // command response. Once turn/started is queued, hold the durable suffix
+    // until the strict driver has bound the returned provider turn.
+    if (this.#turnStartResponsePending && this.#turnStartNotificationQueued) {
+      return;
+    }
     const events = this.#core?.store.state.committedEvents ?? [];
     while (this.#eventIndex < events.length) {
       const event = events[this.#eventIndex++];
@@ -2545,6 +2554,7 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
         this.#turnStartResponsePending &&
         notifications.some((notification) => notification.method === "turn/started")
       ) {
+        this.#turnStartNotificationQueued = true;
         return;
       }
     }
