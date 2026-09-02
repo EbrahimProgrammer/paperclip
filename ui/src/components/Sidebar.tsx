@@ -1,7 +1,7 @@
 import {
   Inbox,
   ListChecks,
-  CircleDot,
+  CircleCheck,
   Target,
   LayoutDashboard,
   DollarSign,
@@ -233,13 +233,17 @@ export function Sidebar({ contentHeaderControls = false }: { contentHeaderContro
         </div>
 
         <SidebarSection label="Work" collapsible={{ open: workOpen, onOpenChange: setWorkOpen }}>
-          <SidebarNavItem to="/issues" label="Tasks" icon={CircleDot} />
-          {showCases ? (
-            <SidebarNavItem to="/cases" label="Cases" icon={Layers} textBadge="beta" />
+          <SidebarNavItem to="/issues" label="Tasks" icon={CircleCheck} />
+          {streamlinedUiEnabled ? (
+            <>
+              <SidebarNavItem to="/projects" label="Projects" icon={FolderOpen} />
+              <SidebarStarredProjects />
+            </>
           ) : null}
           <SidebarNavItem to="/routines" label="Routines" icon={Repeat} />
-          {streamlinedUiEnabled ? (
-            <SidebarNavItem to="/agents" label="Agents" icon={Users} />
+          <SidebarNavItem to="/artifacts" label="Artifacts" icon={Package} />
+          {showCases ? (
+            <SidebarNavItem to="/cases" label="Cases" icon={Layers} textBadge="beta" />
           ) : null}
           {showPipelines ? (
             <SidebarNavItem to="/pipelines" label="Pipelines" icon={GitBranch} />
@@ -253,22 +257,8 @@ export function Sidebar({ contentHeaderControls = false }: { contentHeaderContro
               aria-hidden="true"
             />
           ) : null}
-          <SidebarNavItem to="/artifacts" label="Artifacts" icon={Package} />
-          <SidebarNavItem to="/skills" label="Skills" icon={Boxes} />
           {showWorkspacesLink ? (
             <SidebarNavItem to="/workspaces" label="Workspaces" icon={GitBranch} />
-          ) : null}
-          {streamlinedUiEnabled ? (
-            <>
-              <SidebarNavItem to="/projects" label="Projects" icon={FolderOpen} />
-              <SidebarStarredProjects />
-            </>
-          ) : null}
-          {streamlinedUiEnabled && showApps ? (
-            <SidebarNavItem to="/apps" label="Apps" icon={AppWindow} />
-          ) : null}
-          {streamlinedUiEnabled ? (
-            <SidebarNavItem to="/activity" label="Audit" icon={History} />
           ) : null}
           <PluginSlotOutlet
             slotTypes={["sidebar"]}
@@ -284,6 +274,18 @@ export function Sidebar({ contentHeaderControls = false }: { contentHeaderContro
             itemClassName="text-(length:--text-compact) font-medium"
           />
         </SidebarSection>
+
+        {streamlinedUiEnabled ? (
+          <SidebarSection
+            label="Org"
+            collapsible={{ open: organizationOpen, onOpenChange: setOrganizationOpen }}
+          >
+            <SidebarNavItem to="/agents" label="Agents" icon={Users} />
+            <SidebarNavItem to="/skills" label="Skills" icon={Boxes} />
+            {showApps ? <SidebarNavItem to="/apps" label="Apps" icon={AppWindow} /> : null}
+            <SidebarNavItem to="/activity" label="Audit" icon={History} />
+          </SidebarSection>
+        ) : null}
 
         {streamlinedUiEnabled ? (
           <SidebarRecentTasks companyId={selectedCompanyId} liveIssueIds={liveIssueIds} />

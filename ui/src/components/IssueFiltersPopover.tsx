@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Bot, Filter, HardDrive, Search, User, X } from "lucide-react";
+import { Bot, Check, Filter, HardDrive, Search, User, X } from "lucide-react";
 import { PriorityIcon } from "./PriorityIcon";
 import { SHOW_TASK_PRIORITY_UI } from "../lib/ui-flags";
 import { StatusIcon } from "./StatusIcon";
@@ -24,6 +24,8 @@ import {
 import { externalObjectIconForCategory } from "../lib/external-objects";
 import { externalObjectStatusIcon } from "../lib/status-colors";
 import { formatAssigneeUserLabel } from "../lib/assignees";
+import type { InboxApprovalFilter, InboxCategoryFilter } from "../lib/inbox";
+import { cn } from "../lib/utils";
 
 type AgentOption = {
   id: string;
@@ -52,6 +54,30 @@ type CreatorOption = {
   kind: "agent" | "user";
   searchText?: string;
 };
+
+type InboxScopeFilters = {
+  category: InboxCategoryFilter;
+  approvalStatus: InboxApprovalFilter;
+  showApprovalStatus: boolean;
+  onCategoryChange: (value: InboxCategoryFilter) => void;
+  onApprovalStatusChange: (value: InboxApprovalFilter) => void;
+  onClear: () => void;
+};
+
+const INBOX_CATEGORY_OPTIONS: ReadonlyArray<[InboxCategoryFilter, string]> = [
+  ["everything", "All categories"],
+  ["issues_i_touched", "My recent tasks"],
+  ["join_requests", "Join requests"],
+  ["approvals", "Approvals"],
+  ["failed_runs", "Failed runs"],
+  ["alerts", "Alerts"],
+];
+
+const INBOX_APPROVAL_STATUS_OPTIONS: ReadonlyArray<[InboxApprovalFilter, string]> = [
+  ["all", "All approval statuses"],
+  ["actionable", "Needs action"],
+  ["resolved", "Resolved"],
+];
 
 const SEARCHABLE_FILTER_THRESHOLD = 6;
 
@@ -93,6 +119,7 @@ export function IssueFiltersPopover({
   workspaces,
   creators,
   presentation = "legacy",
+  inboxScopeFilters,
 }: {
   state: IssueFilterState;
   onChange: (patch: Partial<IssueFilterState>) => void;
@@ -108,6 +135,7 @@ export function IssueFiltersPopover({
   workspaces?: WorkspaceOption[];
   creators?: CreatorOption[];
   presentation?: "legacy" | "streamlined";
+  inboxScopeFilters?: InboxScopeFilters;
 }) {
   const streamlined = presentation === "streamlined";
   const [creatorSearch, setCreatorSearch] = useState("");
@@ -160,6 +188,10 @@ export function IssueFiltersPopover({
     }),
     [creatorOptionById, currentUserId, state.creators],
   );
+  const clearFilters = () => {
+    onChange(defaultIssueFilterState);
+    inboxScopeFilters?.onClear();
+  };
 
   return (
     <Popover>
@@ -174,7 +206,7 @@ export function IssueFiltersPopover({
               className="ml-1 hidden h-3 w-3 sm:block"
               onClick={(event) => {
                 event.stopPropagation();
-                onChange(defaultIssueFilterState);
+                clearFilters();
               }}
             />
           ) : null}
@@ -193,12 +225,74 @@ export function IssueFiltersPopover({
               <button
                 type="button"
                 className="text-xs text-muted-foreground hover:text-foreground"
-                onClick={() => onChange(defaultIssueFilterState)}
+                onClick={clearFilters}
               >
                 Clear
               </button>
             ) : null}
           </div>
+
+          {inboxScopeFilters ? (
+            <>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div className="space-y-1" data-filter-options="inbox-category">
+                  <span className="text-xs text-muted-foreground">Category</span>
+                  <div className="space-y-0.5">
+                    {INBOX_CATEGORY_OPTIONS.map(([value, label]) => {
+                      const selected = inboxScopeFilters.category === value;
+                      return (
+                        <button
+                          key={value}
+                          type="button"
+                          aria-pressed={selected}
+                          className={cn(
+                            "flex w-full items-center justify-between rounded-sm px-2 py-1 text-left text-sm",
+                            selected
+                              ? "bg-accent/50 text-foreground"
+                              : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                          )}
+                          onClick={() => inboxScopeFilters.onCategoryChange(value)}
+                        >
+                          <span>{label}</span>
+                          {selected ? <Check className="h-3.5 w-3.5" /> : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {inboxScopeFilters.showApprovalStatus ? (
+                  <div className="space-y-1" data-filter-options="inbox-approval-status">
+                    <span className="text-xs text-muted-foreground">Approval status</span>
+                    <div className="space-y-0.5">
+                      {INBOX_APPROVAL_STATUS_OPTIONS.map(([value, label]) => {
+                        const selected = inboxScopeFilters.approvalStatus === value;
+                        return (
+                          <button
+                            key={value}
+                            type="button"
+                            aria-pressed={selected}
+                            className={cn(
+                              "flex w-full items-center justify-between rounded-sm px-2 py-1 text-left text-sm",
+                              selected
+                                ? "bg-accent/50 text-foreground"
+                                : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                            )}
+                            onClick={() => inboxScopeFilters.onApprovalStatusChange(value)}
+                          >
+                            <span>{label}</span>
+                            {selected ? <Check className="h-3.5 w-3.5" /> : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="border-t border-border" />
+            </>
+          ) : null}
 
           <div className="space-y-1.5">
             <span className="text-xs text-muted-foreground">Quick filters</span>

@@ -70,7 +70,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
-import { CircleDot, Plus, ArrowUpDown, Layers, Check, ChevronRight, List, ListTree, User, Search, CircleSlash2, ChevronsDownUp, PanelTopClose, RotateCcw, ListCollapse, GanttChartSquare,
+import { CircleDot, Plus, ArrowUpDown, Layers, Check, ChevronRight, List, ListTree, User, Search, CircleSlash2, ChevronsDownUp, PanelTopClose, RotateCcw, ListCollapse,
   SquareKanban,
 } from "lucide-react";
 import {
@@ -164,6 +164,7 @@ export type IssueViewState = IssueFilterState & {
   groupBy: "status" | "priority" | "assignee" | "project" | "workspace" | "parent" | "none";
   viewMode: "list" | "board";
   nestingEnabled: boolean;
+  showDateGroupSeparators: boolean;
   collapsedGroups: string[];
   collapsedParents: string[];
   boardCardDensity: BoardCardDensity;
@@ -178,6 +179,7 @@ const defaultViewState: IssueViewState = {
   groupBy: "none",
   viewMode: "list",
   nestingEnabled: true,
+  showDateGroupSeparators: true,
   collapsedGroups: [],
   collapsedParents: [],
   boardCardDensity: "auto",
@@ -214,6 +216,7 @@ function normalizeIssueViewState(value: unknown): IssueViewState {
       : defaultViewState.groupBy,
     viewMode: parsed.viewMode === "board" ? "board" : "list",
     nestingEnabled: parsed.nestingEnabled !== false,
+    showDateGroupSeparators: parsed.showDateGroupSeparators !== false,
     collapsedGroups: Array.isArray(parsed.collapsedGroups)
       ? parsed.collapsedGroups.filter((entry): entry is string => typeof entry === "string")
       : [],
@@ -335,14 +338,19 @@ export function issueAgeBucketsCrossed(
 function IssueDateSeparator({ label }: { label: string }) {
   return (
     <div
-      className="flex items-center justify-center px-3 py-1.5 sm:pl-0 sm:pr-4"
+      className="flex items-center gap-3 px-3 py-1.5 sm:pl-0 sm:pr-4"
       role="separator"
       aria-label={label}
       data-issues-date-separator=""
     >
-      <span className="text-(length:--text-nano) font-medium uppercase tracking-wider text-muted-foreground">
+      <span className="h-px min-w-0 flex-1 bg-border/80" aria-hidden="true" data-date-group-rule="" />
+      <span
+        className="shrink-0 text-(length:--text-nano) font-medium uppercase tracking-wider text-muted-foreground/70"
+        data-date-group-label=""
+      >
         {label}
       </span>
+      <span className="h-px min-w-0 flex-1 bg-border/80" aria-hidden="true" data-date-group-rule="" />
     </div>
   );
 }
@@ -487,8 +495,6 @@ interface IssuesListProps {
   rowPresentation?: IssueRowPresentation;
   /** Opt in per surface while the shared collection toolbar rolls out. */
   toolbarPresentation?: "legacy" | "collection";
-  /** Project task pages can opt into a scoped Timeline destination beside List/Board. */
-  projectTimelineHref?: string;
   onUpdateIssue: (id: string, data: Record<string, unknown>) => void;
 }
 
@@ -721,7 +727,6 @@ function StreamlinedIssuesList({
   onSearchChange,
   rowPresentation = "legacy",
   toolbarPresentation = "legacy",
-  projectTimelineHref,
   onUpdateIssue,
 }: IssuesListProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -1759,17 +1764,6 @@ function StreamlinedIssuesList({
             >
               <SquareKanban className="h-3.5 w-3.5" />
             </button>
-            {projectTimelineHref ? (
-              <button
-                className="flex h-8 w-8 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
-                onClick={() => navigate(projectTimelineHref)}
-                title="Timeline view"
-                aria-label="Timeline view"
-                aria-pressed="false"
-              >
-                <GanttChartSquare className="h-3.5 w-3.5" />
-              </button>
-            ) : null}
           </div>
 
           {viewState.viewMode === "list" && (
@@ -1866,6 +1860,8 @@ function StreamlinedIssuesList({
             availableColumns={availableIssueColumns}
             visibleColumnSet={visibleIssueColumnSet}
             onToggleColumn={toggleIssueColumn}
+            showDateGroupSeparators={viewState.showDateGroupSeparators}
+            onToggleDateGroupSeparators={(enabled) => updateView({ showDateGroupSeparators: enabled })}
             onResetColumns={() => setIssueColumns(DEFAULT_INBOX_ISSUE_COLUMNS)}
             title="Choose which task columns stay visible"
             iconOnly
@@ -2428,7 +2424,9 @@ function StreamlinedIssuesList({
                   );
                 };
 
-                const separatorField = issueDateSeparatorField(viewState);
+                const separatorField = viewState.showDateGroupSeparators
+                  ? issueDateSeparatorField(viewState)
+                  : null;
                 const separatorNow = new Date();
                 const nodes: ReactNode[] = [];
                 let previousDateGroup: TaskDateGroup | null = null;

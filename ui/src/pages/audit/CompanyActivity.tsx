@@ -10,8 +10,8 @@ import { AuditHub } from "./AuditHub";
 
 /**
  * Canonical `/:company/activity` entrypoint for the Audit hub. It retains the
- * shared all-actors and privileged Agent Actions modes while Runs, Costs, and
- * Budgets live as peer sections. The mode lives in `?mode=` so `/audit` deep
+ * shared all-actors and privileged Agent Actions modes while Runs, Costs,
+ * Budgets, and Timeline live as peer sections. The mode lives in `?mode=` so `/audit` deep
  * links can preset it and links stay shareable. The server enforces both tiers.
  */
 export function CompanyActivity() {

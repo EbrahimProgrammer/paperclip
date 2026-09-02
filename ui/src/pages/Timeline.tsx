@@ -304,7 +304,7 @@ function TimelineSummaryStats({
   );
 }
 
-export function Timeline() {
+export function Timeline({ embedded = false }: { embedded?: boolean } = {}) {
   const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const location = useLocation();
@@ -321,8 +321,10 @@ export function Timeline() {
   const [visibleWindow, setVisibleWindow] = useState<VisibleTimelineWindow | null>(null);
 
   useEffect(() => {
-    setBreadcrumbs([{ label: scopedProjectId ? "Project Timeline" : "Timeline" }]);
-  }, [scopedProjectId, setBreadcrumbs]);
+    if (!embedded) {
+      setBreadcrumbs([{ label: scopedProjectId ? "Project Timeline" : "Timeline" }]);
+    }
+  }, [embedded, scopedProjectId, setBreadcrumbs]);
 
   const dateRangeError = rangeError(dateRange);
   const params: WorkTimelineParams | null = useMemo(() => {
@@ -359,7 +361,7 @@ export function Timeline() {
   if (!selectedCompanyId) {
     return (
       <>
-        <RequestCollapsedSidebar />
+        {!embedded && <RequestCollapsedSidebar />}
         <EmptyState icon={GanttChartSquare} message="Select an organization to view its work timeline." />
       </>
     );
@@ -473,7 +475,7 @@ export function Timeline() {
 
   return (
     <div className="space-y-6">
-      <RequestCollapsedSidebar />
+      {!embedded && <RequestCollapsedSidebar />}
       {header}
       {toolbar}
 

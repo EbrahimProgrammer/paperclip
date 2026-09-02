@@ -34,6 +34,7 @@ interface SortableSidePanelTabProps {
   tab: SidePanelTabItem;
   active: boolean;
   appearance: "default" | "streamlined-task";
+  fillAvailableWidth: boolean;
   showLeadingSeparator: boolean;
   onSelect: () => void;
   onClose: () => void;
@@ -41,7 +42,17 @@ interface SortableSidePanelTabProps {
   onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => void;
 }
 
-function SortableSidePanelTab({ tab, active, appearance, showLeadingSeparator, onSelect, onClose, onAuxClick, onKeyDown }: SortableSidePanelTabProps) {
+function SortableSidePanelTab({
+  tab,
+  active,
+  appearance,
+  fillAvailableWidth,
+  showLeadingSeparator,
+  onSelect,
+  onClose,
+  onAuxClick,
+  onKeyDown,
+}: SortableSidePanelTabProps) {
   const sortable = useSortable({ id: tab.id, disabled: tab.disabled });
   return (
     <div
@@ -52,7 +63,12 @@ function SortableSidePanelTab({ tab, active, appearance, showLeadingSeparator, o
       }}
       className={cn(
         appearance === "streamlined-task"
-          ? "relative flex min-w-(--side-panel-streamlined-tab-min-width) max-w-(--side-panel-streamlined-tab-max-width) flex-1 basis-0 items-center"
+          ? cn(
+              "relative flex flex-1 items-center",
+              fillAvailableWidth
+                ? "min-w-0 max-w-none basis-auto"
+                : "min-w-(--side-panel-streamlined-tab-min-width) max-w-(--side-panel-streamlined-tab-max-width) basis-0",
+            )
           : "relative",
         sortable.isDragging && "z-20 opacity-80",
       )}
@@ -256,7 +272,9 @@ export function SidePanelTabs({
             <div className={cn(
               "flex items-center",
               appearance === "streamlined-task"
-                ? "w-max min-w-full gap-0"
+                ? tabs.length === 1
+                  ? "w-full gap-0"
+                  : "w-max min-w-full gap-0"
                 : "min-w-max gap-1 py-1",
             )}>
               {tabs.map((tab, index) => (
@@ -265,6 +283,9 @@ export function SidePanelTabs({
                   tab={tab}
                   active={tab.id === activeTabId}
                   appearance={appearance}
+                  fillAvailableWidth={
+                    appearance === "streamlined-task" && tabs.length === 1
+                  }
                   showLeadingSeparator={
                     appearance === "streamlined-task"
                       ? index > 0

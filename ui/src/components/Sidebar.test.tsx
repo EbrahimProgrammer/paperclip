@@ -390,24 +390,25 @@ describe("Sidebar", () => {
     });
   });
 
-  it("shows Skills directly below Artifacts in Work", async () => {
-    mockInstanceSettingsApi.getExperimental.mockResolvedValue({ enableIsolatedWorkspaces: false });
+  it("groups and orders the streamlined Work and Org navigation", async () => {
+    mockInstanceSettingsApi.getExperimental.mockResolvedValue({
+      enableIsolatedWorkspaces: false,
+      enableApps: true,
+    });
     const root = await renderSidebar();
-
-    const artifactsLink = [...container.querySelectorAll("a")].find(
-      (anchor) => anchor.textContent === "Artifacts",
-    );
-    expect(artifactsLink?.getAttribute("href")).toBe("/artifacts");
-
-    const navText = container.querySelector("nav")?.textContent ?? "";
-    expect(navText).toContain("Artifacts");
-    expect(navText).toContain("Skills");
-    expect(navText.indexOf("Artifacts")).toBeLessThan(navText.indexOf("Skills"));
 
     const sections = [...container.querySelectorAll("nav > div")];
     const workSection = sections.find((section) => section.textContent?.startsWith("Work"));
-    expect(workSection?.textContent).toContain("Skills");
-    expect(container.textContent).not.toContain("Organization");
+    const orgSection = sections.find((section) => section.textContent?.startsWith("Org"));
+    const labels = (section: Element | undefined) => [...(section?.querySelectorAll("a") ?? [])]
+      .map((anchor) => anchor.textContent?.trim());
+
+    expect(labels(workSection)).toEqual(["Tasks", "Projects", "Routines", "Artifacts"]);
+    expect(labels(orgSection)).toEqual(["Agents", "Skills", "Apps", "Audit"]);
+    expect(sections.indexOf(workSection!)).toBeLessThan(sections.indexOf(orgSection!));
+    expect(
+      workSection?.querySelector('a[href="/issues"] svg')?.classList.contains("lucide-circle-check"),
+    ).toBe(true);
 
     flushSync(() => {
       root.unmount();
@@ -451,7 +452,7 @@ describe("Sidebar", () => {
     expect(link?.getAttribute("href")).toBe("/goals");
 
     const navText = container.querySelector("nav")?.textContent ?? "";
-    expect(navText.indexOf("Goals")).toBeLessThan(navText.indexOf("Artifacts"));
+    expect(navText.indexOf("Artifacts")).toBeLessThan(navText.indexOf("Goals"));
 
     flushSync(() => {
       root.unmount();

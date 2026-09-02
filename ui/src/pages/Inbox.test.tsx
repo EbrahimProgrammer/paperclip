@@ -720,8 +720,56 @@ describe("Inbox toolbar", () => {
     });
     await vi.waitFor(() => expect(container.textContent).toContain("Earlier task"));
 
-    expect([...container.querySelectorAll('[data-testid="inbox-date-group"]')].map((node) => node.textContent?.trim()))
+    const separators = [...container.querySelectorAll('[data-testid="inbox-date-group"]')];
+    expect(separators.map((node) => node.textContent?.trim()))
       .toEqual(["Today", "Yesterday", "Earlier"]);
+    expect(separators.every((separator) => (
+      separator.querySelectorAll("[data-date-group-rule]").length === 2
+    ))).toBe(true);
+    expect(separators.every((separator) => (
+      separator.querySelector("[data-date-group-label]")?.classList.contains("text-muted-foreground/70")
+    ))).toBe(true);
+
+    act(() => root.unmount());
+  });
+
+  it("honors the saved Columns option for hiding date group separators", async () => {
+    routerMock.location.pathname = "/inbox/mine";
+    localStorage.setItem(
+      taskCollectionPreferencesStorageKey({
+        companyId: "company-1",
+        collectionKey: "inbox",
+      }),
+      JSON.stringify({
+        version: 1,
+        companyId: "company-1",
+        collectionKey: "inbox",
+        viewState: { showDateGroupSeparators: false },
+        columns: ["status", "id", "updated"],
+      }),
+    );
+    const now = new Date();
+    const localNoon = (daysAgo: number) =>
+      new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysAgo, 12, 0, 0);
+    apiMocks.issuesList.mockResolvedValue([
+      createIssue({ id: "today", title: "Today task", lastActivityAt: localNoon(0) }),
+      createIssue({ id: "earlier", title: "Earlier task", lastActivityAt: localNoon(3) }),
+    ]);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 0, gcTime: 0 } },
+    });
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <Inbox />
+        </QueryClientProvider>,
+      );
+    });
+    await vi.waitFor(() => expect(container.textContent).toContain("Earlier task"));
+
+    expect(container.querySelector('[data-testid="inbox-date-group"]')).toBeNull();
 
     act(() => root.unmount());
   });

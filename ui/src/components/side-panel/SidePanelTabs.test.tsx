@@ -140,6 +140,7 @@ describe("SidePanelTabs", () => {
 
     const planLabel = container.querySelector<HTMLElement>('[data-side-panel-tab-target="document:plan"] span');
     expect(planLabel?.className).toContain("task-detail-pane-tab-label");
+    expect(planLabel?.className).toContain("side-panel-tab-label-close-fade");
     expect(planLabel?.className).toContain("text-center");
     const tabList = container.querySelector<HTMLElement>('[role="tablist"]');
     expect(tabList?.className).toContain("overflow-x-auto");
@@ -156,6 +157,43 @@ describe("SidePanelTabs", () => {
     expect(addButton?.className).toContain("h-(--side-panel-tab-height)");
     expect(addButton?.className).toContain("w-(--side-panel-tab-height)");
     expect(addButton?.className).toContain("hover:bg-accent");
+  });
+
+  it("lets a lone Streamlined tab fill the space before the add action", () => {
+    act(() => {
+      root.render(
+        <TooltipProvider>
+          <SidePanelTabs
+            tabs={[
+              {
+                id: "properties",
+                type: "view",
+                label: "Properties",
+                closable: true,
+              },
+            ]}
+            activeTabId="properties"
+            onActiveTabChange={vi.fn()}
+            onCloseTab={vi.fn()}
+            onAddTab={vi.fn()}
+            appearance="streamlined-task"
+          />
+        </TooltipProvider>,
+      );
+    });
+
+    const tabList = container.querySelector<HTMLElement>('[role="tablist"]');
+    const tabTrack = tabList?.firstElementChild;
+    const propertiesWrapper = container.querySelector<HTMLElement>(
+      '[data-side-panel-tab-wrapper="properties"]',
+    )?.parentElement;
+    expect(tabTrack?.className).toContain("w-full");
+    expect(tabTrack?.className).not.toContain("w-max");
+    expect(propertiesWrapper?.className).toContain("max-w-none");
+    expect(propertiesWrapper?.className).toContain("flex-1");
+    expect(propertiesWrapper?.className).not.toContain(
+      "max-w-(--side-panel-streamlined-tab-max-width)",
+    );
   });
 
   it("enables the tab flyout only while its label is truncated", () => {

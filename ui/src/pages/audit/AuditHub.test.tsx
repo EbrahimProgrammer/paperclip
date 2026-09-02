@@ -56,6 +56,12 @@ vi.mock("@/pages/Costs", () => ({
   ),
 }));
 
+vi.mock("@/pages/Timeline", () => ({
+  Timeline: ({ embedded }: { embedded?: boolean }) => (
+    <div data-testid="audit-timeline" data-embedded={String(embedded ?? false)} />
+  ),
+}));
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -75,7 +81,7 @@ describe("AuditHub", () => {
     vi.clearAllMocks();
   });
 
-  function render(section: "activity" | "runs" | "costs" | "budgets") {
+  function render(section: "activity" | "runs" | "costs" | "budgets" | "timeline") {
     root = createRoot(container);
     flushSync(() => root.render(<AuditHub section={section} />));
   }
@@ -84,17 +90,28 @@ describe("AuditHub", () => {
     currentSearch = "mode=agents&agentId=agent-1&runId=run-1&entityType=routine&entityId=routine-1";
     render("activity");
 
-    expect(container.querySelectorAll('[role="tab"]')).toHaveLength(4);
+    expect(container.querySelectorAll('[role="tab"]')).toHaveLength(5);
     expect(container.textContent).toContain("Activity");
     expect(container.textContent).toContain("Runs");
     expect(container.textContent).toContain("Costs");
     expect(container.textContent).toContain("Budgets");
+    expect(container.textContent).toContain("Timeline");
     const feed = container.querySelector<HTMLElement>('[data-testid="audit-feed"]');
     expect(feed?.dataset.mode).toBe("agents");
     expect(feed?.dataset.agent).toBe("agent-1");
     expect(feed?.dataset.run).toBe("run-1");
     expect(feed?.dataset.entity).toBe(JSON.stringify({ type: "routine", id: "routine-1" }));
     expect(setBreadcrumbsMock).toHaveBeenCalledWith([{ label: "Audit" }]);
+  });
+
+  it("renders Timeline as the section after Budgets", () => {
+    render("timeline");
+
+    const labels = Array.from(container.querySelectorAll<HTMLElement>('[role="tab"]'))
+      .map((tab) => tab.textContent?.trim());
+    expect(labels).toEqual(["Activity", "Runs", "Costs", "Budgets", "Timeline"]);
+    expect(container.querySelector<HTMLElement>('[data-testid="audit-timeline"]')?.dataset.embedded)
+      .toBe("true");
   });
 
   it("renders Costs and Budgets as intentional peer sections", () => {

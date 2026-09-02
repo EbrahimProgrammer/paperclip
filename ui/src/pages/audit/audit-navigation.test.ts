@@ -13,6 +13,7 @@ describe("audit navigation", () => {
     expect(auditSectionHref("runs")).toBe("/activity/runs");
     expect(auditSectionHref("costs")).toBe("/activity/costs");
     expect(auditSectionHref("budgets")).toBe("/activity/budgets");
+    expect(auditSectionHref("timeline")).toBe("/activity/timeline");
   });
 
   it("provides agent, routine, and run scoped links", () => {

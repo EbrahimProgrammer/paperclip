@@ -105,13 +105,6 @@ import {
 } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
 import { Tabs } from "@/components/ui/tabs";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Inbox as InboxIcon,
@@ -201,15 +194,20 @@ const INBOX_ISSUE_LIST_LIMIT = 500;
 const INBOX_HOT_PATH_STALE_MS = 30_000;
 const INBOX_COLLECTION_KEY = "inbox";
 
-const DEFAULT_INBOX_FILTER_PREFERENCES: InboxFilterPreferences = {
+type StreamlinedInboxViewState = InboxFilterPreferences & {
+  showDateGroupSeparators: boolean;
+};
+
+const DEFAULT_INBOX_FILTER_PREFERENCES: StreamlinedInboxViewState = {
   allCategoryFilter: "everything",
   allApprovalFilter: "all",
   issueFilters: { ...defaultIssueFilterState },
+  showDateGroupSeparators: true,
 };
 
-function normalizeInboxCollectionViewState(value: unknown): InboxFilterPreferences {
+function normalizeInboxCollectionViewState(value: unknown): StreamlinedInboxViewState {
   const candidate = value && typeof value === "object"
-    ? value as Partial<InboxFilterPreferences>
+    ? value as Partial<StreamlinedInboxViewState>
     : {};
   const category = candidate.allCategoryFilter;
   const approval = candidate.allApprovalFilter;
@@ -224,6 +222,7 @@ function normalizeInboxCollectionViewState(value: unknown): InboxFilterPreferenc
         : "everything",
     allApprovalFilter: approval === "actionable" || approval === "resolved" ? approval : "all",
     issueFilters: normalizeIssueFilterState(candidate.issueFilters),
+    showDateGroupSeparators: candidate.showDateGroupSeparators !== false,
   };
 }
 
@@ -814,7 +813,7 @@ function StreamlinedInbox() {
   const experimentalSettingsLoaded = experimentalSettings !== undefined;
   const [searchQuery, setSearchQuery] = useState("");
   const normalizedSearchQuery = searchQuery.trim();
-  const [filterPreferences, setFilterPreferences] = useState<InboxFilterPreferences>(
+  const [filterPreferences, setFilterPreferences] = useState<StreamlinedInboxViewState>(
     () => loadInboxCollectionPreferences(selectedCompanyId).viewState,
   );
   const [groupBy, setGroupBy] = useState<InboxWorkItemGroupBy>(() => loadInboxWorkItemGroupBy());
@@ -1697,7 +1696,7 @@ function StreamlinedInbox() {
     setIssueColumns(visibleIssueColumns.filter((value) => value !== column));
   }, [setIssueColumns, visibleIssueColumns]);
   const updateFilterPreferences = useCallback(
-    (updater: (previous: InboxFilterPreferences) => InboxFilterPreferences) => {
+    (updater: (previous: StreamlinedInboxViewState) => StreamlinedInboxViewState) => {
       setFilterPreferences((previous) => {
         const next = updater(previous);
         saveTaskCollectionPreferences(inboxCollectionPreferenceLocation(selectedCompanyId), {
@@ -2381,6 +2380,11 @@ function StreamlinedInbox() {
     .map((issue) => issue.id);
   const canMarkAllRead = unreadIssueIds.length > 0;
   const activeIssueFilterCount = countActiveIssueFilters(issueFilters, true);
+  const activeInboxScopeFilterCount = tab === "all"
+    ? Number(allCategoryFilter !== "everything")
+      + Number(showApprovalsCategory && allApprovalFilter !== "all")
+    : 0;
+  const activeFilterCount = activeIssueFilterCount + activeInboxScopeFilterCount;
   const showGeneralIssueToolbarControls = tab !== "blocked";
   const activeStatusFilterApplied =
     issueFilters.statuses.length === 4
@@ -2495,6 +2499,13 @@ function StreamlinedInbox() {
                 availableColumns={availableIssueColumns}
                 visibleColumnSet={visibleIssueColumnSet}
                 onToggleColumn={toggleIssueColumn}
+                showDateGroupSeparators={filterPreferences.showDateGroupSeparators}
+                onToggleDateGroupSeparators={(enabled) => {
+                  updateFilterPreferences((previous) => ({
+                    ...previous,
+                    showDateGroupSeparators: enabled,
+                  }));
+                }}
                 onResetColumns={() => setIssueColumns(DEFAULT_INBOX_ISSUE_COLUMNS)}
                 title="Choose which inbox columns stay visible"
                 iconOnly
@@ -2546,7 +2557,7 @@ function StreamlinedInbox() {
               <IssueFiltersPopover
                 state={issueFilters}
                 onChange={updateIssueFilters}
-                activeFilterCount={activeIssueFilterCount}
+                activeFilterCount={activeFilterCount}
                 agents={agents}
                 creators={creatorOptions}
                 projects={projects?.map((project) => ({ id: project.id, name: project.name }))}
@@ -2558,6 +2569,20 @@ function StreamlinedInbox() {
                 iconOnly
                 workspaces={isolatedWorkspacesEnabled ? executionWorkspaces.filter((w) => w.mode === "isolated_workspace").map((w) => ({ id: w.id, name: w.name })) : undefined}
                 presentation={streamlinedUiEnabled ? "streamlined" : "legacy"}
+                inboxScopeFilters={tab === "all" ? {
+                  category: allCategoryFilter,
+                  approvalStatus: allApprovalFilter,
+                  showApprovalStatus: showApprovalsCategory,
+                  onCategoryChange: updateAllCategoryFilter,
+                  onApprovalStatusChange: updateAllApprovalFilter,
+                  onClear: () => {
+                    updateFilterPreferences((previous) => ({
+                      ...previous,
+                      allCategoryFilter: "everything",
+                      allApprovalFilter: "all",
+                    }));
+                  },
+                } : undefined}
               />
               <Popover>
                 <PopoverTrigger asChild>
@@ -2600,6 +2625,13 @@ function StreamlinedInbox() {
                 availableColumns={availableIssueColumns}
                 visibleColumnSet={visibleIssueColumnSet}
                 onToggleColumn={toggleIssueColumn}
+                showDateGroupSeparators={filterPreferences.showDateGroupSeparators}
+                onToggleDateGroupSeparators={(enabled) => {
+                  updateFilterPreferences((previous) => ({
+                    ...previous,
+                    showDateGroupSeparators: enabled,
+                  }));
+                }}
                 onResetColumns={() => setIssueColumns(DEFAULT_INBOX_ISSUE_COLUMNS)}
                 title="Choose which inbox columns stay visible"
                 iconOnly
@@ -2652,43 +2684,6 @@ function StreamlinedInbox() {
           </p>
         ) : null}
       />
-
-      {tab === "all" && (
-        <div className="flex flex-wrap items-center gap-2">
-          <Select
-            value={allCategoryFilter}
-            onValueChange={(value) => updateAllCategoryFilter(value as InboxCategoryFilter)}
-          >
-            <SelectTrigger className="h-8 w-(--sz-170px) text-xs">
-              <SelectValue placeholder="Category" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="everything">All categories</SelectItem>
-              <SelectItem value="issues_i_touched">My recent tasks</SelectItem>
-              <SelectItem value="join_requests">Join requests</SelectItem>
-              <SelectItem value="approvals">Approvals</SelectItem>
-              <SelectItem value="failed_runs">Failed runs</SelectItem>
-              <SelectItem value="alerts">Alerts</SelectItem>
-            </SelectContent>
-          </Select>
-
-          {showApprovalsCategory && (
-            <Select
-              value={allApprovalFilter}
-              onValueChange={(value) => updateAllApprovalFilter(value as InboxApprovalFilter)}
-            >
-              <SelectTrigger className="h-8 w-(--sz-170px) text-xs">
-                <SelectValue placeholder="Approval status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All approval statuses</SelectItem>
-                <SelectItem value="actionable">Needs action</SelectItem>
-                <SelectItem value="resolved">Resolved</SelectItem>
-              </SelectContent>
-            </Select>
-          )}
-        </div>
-      )}
 
       {approvalsError && <p className="text-sm text-destructive">{approvalsError.message}</p>}
       {actionError && <p className="text-sm text-destructive">{actionError}</p>}
@@ -3015,7 +3010,9 @@ function StreamlinedInbox() {
                       </div>
                     );
                     const currentDateGroup = taskDateGroup(item.timestamp);
-                    const dateGroupLabel = streamlinedUiEnabled && groupBy === "none"
+                    const dateGroupLabel = streamlinedUiEnabled
+                      && filterPreferences.showDateGroupSeparators
+                      && groupBy === "none"
                       ? taskDateGroupSeparator(previousDateGroup, currentDateGroup)
                       : null;
                     previousDateGroup = currentDateGroup;
@@ -3029,21 +3026,29 @@ function StreamlinedInbox() {
                       elements.push(
                         <div
                           key={`date-divider-${group.key}-${currentDateGroup}-${index}`}
-                          className="flex items-center justify-center px-3 py-1.5 sm:pl-0 sm:pr-4"
+                          className="flex items-center gap-3 px-3 py-1.5 sm:pl-0 sm:pr-4"
                           data-testid="inbox-date-group"
                           role="separator"
                           aria-label={dateGroupLabel}
                         >
-                          <span className="shrink-0 text-(length:--text-nano) font-medium uppercase tracking-wider text-muted-foreground">
+                          <span className="h-px min-w-0 flex-1 bg-border/80" aria-hidden="true" data-date-group-rule="" />
+                          <span
+                            className="shrink-0 text-(length:--text-nano) font-medium uppercase tracking-wider text-muted-foreground/70"
+                            data-date-group-label=""
+                          >
                             {dateGroupLabel}
                           </span>
+                          <span className="h-px min-w-0 flex-1 bg-border/80" aria-hidden="true" data-date-group-rule="" />
                         </div>,
                       );
                     } else if (showLegacyEarlierDivider) {
                       elements.push(
                         <div key={`earlier-divider-${group.key}-${index}`} className="my-2 flex items-center gap-3 px-4">
                           <div className="flex-1 border-t border-border" />
-                          <span className="shrink-0 text-(length:--text-micro) font-medium uppercase tracking-wider text-muted-foreground">
+                          <span
+                            className="shrink-0 text-(length:--text-micro) font-medium uppercase tracking-wider text-muted-foreground/70"
+                            data-date-group-label=""
+                          >
                             Earlier
                           </span>
                         </div>,

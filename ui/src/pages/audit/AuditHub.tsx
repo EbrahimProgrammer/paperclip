@@ -7,6 +7,7 @@ import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { useCompany } from "@/context/CompanyContext";
 import { useNavigate, useSearchParams } from "@/lib/router";
 import { Costs } from "@/pages/Costs";
+import { Timeline } from "@/pages/Timeline";
 import { AuditFeed, type AuditFeedMode } from "./AuditFeed";
 import { AuditRuns } from "./AuditRuns";
 import {
@@ -89,6 +90,8 @@ export function AuditHub({ section }: { section: AuditSection }) {
         <AuditRuns companyId={selectedCompanyId} />
       ) : section === "budgets" ? (
         <Costs embedded initialTab="budgets" lockTab />
+      ) : section === "timeline" ? (
+        <Timeline embedded />
       ) : (
         <Costs embedded initialTab="overview" hideBudgetsTab />
       )}

@@ -86,6 +86,8 @@ export function IssueColumnPicker({
   availableColumns,
   visibleColumnSet,
   onToggleColumn,
+  showDateGroupSeparators,
+  onToggleDateGroupSeparators,
   onResetColumns,
   title,
   iconOnly = false,
@@ -94,6 +96,8 @@ export function IssueColumnPicker({
   availableColumns: InboxIssueColumn[];
   visibleColumnSet: ReadonlySet<InboxIssueColumn>;
   onToggleColumn: (column: InboxIssueColumn, enabled: boolean) => void;
+  showDateGroupSeparators?: boolean;
+  onToggleDateGroupSeparators?: (enabled: boolean) => void;
   onResetColumns: () => void;
   title: string;
   iconOnly?: boolean;
@@ -143,6 +147,23 @@ export function IssueColumnPicker({
             </span>
           </DropdownMenuCheckboxItem>
         ))}
+        {showDateGroupSeparators !== undefined && onToggleDateGroupSeparators ? (
+          <DropdownMenuCheckboxItem
+            checked={showDateGroupSeparators}
+            onSelect={(event) => event.preventDefault()}
+            onCheckedChange={(checked) => onToggleDateGroupSeparators(checked === true)}
+            className="items-start rounded-lg px-3 py-2.5 pl-8"
+          >
+            <span className="flex flex-col gap-0.5">
+              <span className="text-sm font-medium text-foreground">
+                Date group separators
+              </span>
+              <span className="text-xs leading-relaxed text-muted-foreground">
+                Show Today, Yesterday, and Earlier rules on newest-first task lists.
+              </span>
+            </span>
+          </DropdownMenuCheckboxItem>
+        ) : null}
         <DropdownMenuSeparator />
         <DropdownMenuItem
           onSelect={onResetColumns}

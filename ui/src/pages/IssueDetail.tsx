@@ -2677,7 +2677,6 @@ export function IssueDetail() {
     useState(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const lastMarkedReadIssueIdRef = useRef<string | null>(null);
-  const lastRecordedRecentTaskKeyRef = useRef<string | null>(null);
   const lastScrollIssueIdRef = useRef<string | undefined>(undefined);
   const commentComposerRef = useRef<IssueChatComposerHandle | null>(null);
   const cancelledQueuedOptimisticCommentIdsRef = useRef(new Set<string>());
@@ -2984,9 +2983,6 @@ export function IssueDetail() {
   const currentUserId = session?.user?.id ?? session?.session?.userId ?? null;
   useEffect(() => {
     if (!streamlinedUiEnabled || !issue || !sessionResolved) return;
-    const recentTaskKey = `${issue.id}:${currentUserId ?? "__local_board__"}`;
-    if (lastRecordedRecentTaskKeyRef.current === recentTaskKey) return;
-    lastRecordedRecentTaskKeyRef.current = recentTaskKey;
     recordRecentTask(issue, currentUserId);
   }, [issue, currentUserId, sessionResolved, streamlinedUiEnabled]);
   const { data: boardAccess } = useQuery({
@@ -3587,6 +3583,9 @@ export function IssueDetail() {
       const issueRefs = new Set<string>([issueId!, nextIssue.id]);
       if (nextIssue.identifier) issueRefs.add(nextIssue.identifier);
       mergeIssueResponseIntoCaches(issueRefs, nextIssue);
+      if (streamlinedUiEnabled && sessionResolved) {
+        recordRecentTask(nextIssue, currentUserId);
+      }
       queryClient.invalidateQueries({
         queryKey: queryKeys.issues.activity(issueId!),
       });
@@ -4188,6 +4187,13 @@ export function IssueDetail() {
           current.filter(
             (entry) => entry.clientId !== context.optimisticCommentId,
           ),
+        );
+      }
+      if (streamlinedUiEnabled && issue && sessionResolved) {
+        recordRecentTask(
+          issue,
+          currentUserId,
+          new Date(comment.createdAt).getTime(),
         );
       }
     },
@@ -6410,39 +6416,40 @@ export function IssueDetail() {
   // scroll viewport, so they scroll away with the messages and the composer
   // stays near the viewport bottom. Flag OFF renders the same nodes in the
   // page flow, in their original order relative to the alert banners.
-  const ancestorsNav = ancestors.length > 0 && (
-    <nav
-      className={cn(
-        "flex items-center gap-1 text-xs text-muted-foreground flex-wrap",
-        shellSectionClass,
-      )}
-    >
-      {[...ancestors].reverse().map((ancestor, i) => (
-        <span key={ancestor.id} className="flex items-center gap-1">
-          {i > 0 && <ChevronRight className="h-3 w-3 shrink-0" />}
-          <Link
-            to={createIssueDetailPath(ancestor.identifier ?? ancestor.id)}
-            state={resolvedIssueDetailState ?? location.state}
-            onClickCapture={() =>
-              rememberIssueDetailLocationState(
-                ancestor.identifier ?? ancestor.id,
-                resolvedIssueDetailState ?? location.state,
-                location.search,
-              )
-            }
-            className="hover:text-foreground transition-colors truncate max-w-(--sz-200px)"
-            title={ancestor.title}
-          >
-            {ancestor.title}
-          </Link>
+  const ancestorsNav =
+    !streamlinedTaskDetailEnabled && ancestors.length > 0 ? (
+      <nav
+        className={cn(
+          "flex items-center gap-1 text-xs text-muted-foreground flex-wrap",
+          shellSectionClass,
+        )}
+      >
+        {[...ancestors].reverse().map((ancestor, i) => (
+          <span key={ancestor.id} className="flex items-center gap-1">
+            {i > 0 && <ChevronRight className="h-3 w-3 shrink-0" />}
+            <Link
+              to={createIssueDetailPath(ancestor.identifier ?? ancestor.id)}
+              state={resolvedIssueDetailState ?? location.state}
+              onClickCapture={() =>
+                rememberIssueDetailLocationState(
+                  ancestor.identifier ?? ancestor.id,
+                  resolvedIssueDetailState ?? location.state,
+                  location.search,
+                )
+              }
+              className="hover:text-foreground transition-colors truncate max-w-(--sz-200px)"
+              title={ancestor.title}
+            >
+              {ancestor.title}
+            </Link>
+          </span>
+        ))}
+        <ChevronRight className="h-3 w-3 shrink-0" />
+        <span className="text-foreground/60 truncate max-w-(--sz-200px)">
+          {issue.title}
         </span>
-      ))}
-      <ChevronRight className="h-3 w-3 shrink-0" />
-      <span className="text-foreground/60 truncate max-w-(--sz-200px)">
-        {issue.title}
-      </span>
-    </nav>
-  );
+      </nav>
+    ) : null;
 
   const issueStatusControl = (
     <StatusIcon
@@ -6617,7 +6624,7 @@ export function IssueDetail() {
           userLabelMap={userLabelMap}
         />
 
-        {(issue.labels ?? []).length > 0 && (
+        {!streamlinedTaskDetailEnabled && (issue.labels ?? []).length > 0 && (
           <div className="hidden sm:flex items-center gap-1">
             {(issue.labels ?? []).slice(0, 4).map((label) => (
               <Badge

@@ -2182,6 +2182,56 @@ describe("IssuesList", () => {
       const separators = Array.from(container.querySelectorAll("[data-issues-date-separator]"));
       const labels = separators.map((el) => el.getAttribute("aria-label"));
       expect(labels).toEqual(["Today", "Earlier"]);
+      expect(separators.every((separator) => (
+        separator.querySelectorAll("[data-date-group-rule]").length === 2
+      ))).toBe(true);
+      expect(separators.every((separator) => (
+        separator.querySelector("[data-date-group-label]")?.classList.contains("text-muted-foreground/70")
+      ))).toBe(true);
+    });
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("can hide date group separators from the persisted Columns option", async () => {
+    const collectionKey = "paperclip:test-issues";
+    localStorage.setItem(
+      taskCollectionPreferencesStorageKey({
+        companyId: "company-1",
+        collectionKey,
+      }),
+      JSON.stringify({
+        version: 1,
+        companyId: "company-1",
+        collectionKey,
+        viewState: { showDateGroupSeparators: false },
+        columns: ["status", "id", "updated"],
+      }),
+    );
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12);
+    const threeDaysAgo = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 3, 12);
+
+    const { root } = renderWithQueryClient(
+      <IssuesList
+        issues={[
+          createIssue({ id: "issue-recent", title: "Just updated", updatedAt: today }),
+          createIssue({ id: "issue-old", title: "Earlier task", updatedAt: threeDaysAgo }),
+        ]}
+        agents={[]}
+        projects={[]}
+        viewStateKey={collectionKey}
+        rowPresentation="task"
+        onUpdateIssue={() => undefined}
+      />,
+      container,
+    );
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("Earlier task");
+      expect(container.querySelector("[data-issues-date-separator]")).toBeNull();
     });
 
     act(() => {
@@ -2218,29 +2268,6 @@ describe("IssuesList", () => {
     act(() => {
       root.unmount();
     });
-  });
-
-  it("shows the scoped Timeline control only when a project page supplies it", async () => {
-    const { root } = renderWithQueryClient(
-      <IssuesList
-        issues={[createIssue()]}
-        agents={[]}
-        projects={[]}
-        projectId="project-1"
-        projectTimelineHref="/timeline?projectId=project-1"
-        viewStateKey="paperclip:test-project-issues"
-        onUpdateIssue={() => undefined}
-      />,
-      container,
-    );
-    await flush();
-
-    const timelineButton = container.querySelector<HTMLButtonElement>('button[aria-label="Timeline view"]');
-    expect(timelineButton).not.toBeNull();
-    act(() => timelineButton?.click());
-    expect(mockNavigate).toHaveBeenCalledWith("/timeline?projectId=project-1");
-
-    act(() => root.unmount());
   });
 
   it("places separators around expanded nested rows in visible order", async () => {

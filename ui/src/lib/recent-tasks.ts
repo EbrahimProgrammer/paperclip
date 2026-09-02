@@ -39,19 +39,24 @@ export function readRecentTasks(storageKey: string, companyId: string): RecentTa
   try {
     const parsed = JSON.parse(window.localStorage.getItem(storageKey) ?? "[]") as unknown;
     if (!Array.isArray(parsed)) return [];
-    const seen = new Set<string>();
-    return parsed
-      .filter((entry): entry is RecentTaskEntry => isRecentTaskEntry(entry, companyId))
-      .sort((left, right) => right.recordedAt - left.recordedAt)
-      .filter((entry) => {
-        if (seen.has(entry.id)) return false;
-        seen.add(entry.id);
-        return true;
-      })
-      .slice(0, RECENT_TASKS_LIMIT);
+    return normalizeRecentTasks(
+      parsed.filter((entry): entry is RecentTaskEntry => isRecentTaskEntry(entry, companyId)),
+    );
   } catch {
     return [];
   }
+}
+
+function normalizeRecentTasks(entries: RecentTaskEntry[]) {
+  const seen = new Set<string>();
+  return [...entries]
+    .sort((left, right) => right.recordedAt - left.recordedAt)
+    .filter((entry) => {
+      if (seen.has(entry.id)) return false;
+      seen.add(entry.id);
+      return true;
+    })
+    .slice(0, RECENT_TASKS_LIMIT);
 }
 
 function publishRecentTasks(storageKey: string, entries: RecentTaskEntry[]) {
@@ -63,7 +68,7 @@ function publishRecentTasks(storageKey: string, entries: RecentTaskEntry[]) {
 
 export function writeRecentTasks(storageKey: string, entries: RecentTaskEntry[]) {
   if (typeof window === "undefined") return;
-  const bounded = entries.slice(0, RECENT_TASKS_LIMIT);
+  const bounded = normalizeRecentTasks(entries);
   try {
     window.localStorage.setItem(storageKey, JSON.stringify(bounded));
   } catch {
@@ -73,21 +78,38 @@ export function writeRecentTasks(storageKey: string, entries: RecentTaskEntry[])
 }
 
 export function recordRecentTask(
-  issue: Pick<Issue, "id" | "companyId" | "title" | "identifier" | "status">,
+  issue: Pick<Issue, "id" | "companyId" | "title" | "identifier" | "status" | "updatedAt">,
   userId: string | null | undefined,
-  recordedAt = Date.now(),
+  recordedAt = new Date(issue.updatedAt).getTime(),
 ) {
   const storageKey = getRecentTasksStorageKey(issue.companyId, userId);
+  const current = readRecentTasks(storageKey, issue.companyId);
+  const existing = current.find((candidate) => candidate.id === issue.id);
+  const activityAt = Number.isFinite(recordedAt)
+    ? recordedAt
+    : existing?.recordedAt ?? Date.now();
   const entry: RecentTaskEntry = {
     id: issue.id,
     companyId: issue.companyId,
     title: issue.title,
     identifier: issue.identifier,
     status: issue.status,
-    recordedAt,
+    recordedAt: activityAt,
   };
-  const current = readRecentTasks(storageKey, issue.companyId);
-  writeRecentTasks(storageKey, [entry, ...current.filter((candidate) => candidate.id !== issue.id)]);
+  if (
+    existing
+    && existing.title === entry.title
+    && existing.identifier === entry.identifier
+    && existing.status === entry.status
+    && existing.recordedAt === entry.recordedAt
+  ) return;
+
+  writeRecentTasks(
+    storageKey,
+    existing
+      ? current.map((candidate) => candidate.id === issue.id ? entry : candidate)
+      : [entry, ...current],
+  );
 }
 
 export function pruneRecentTasks(
@@ -104,7 +126,7 @@ export function pruneRecentTasks(
 export function updateRecentTaskSnapshots(
   storageKey: string,
   companyId: string,
-  issues: ReadonlyArray<Pick<Issue, "id" | "companyId" | "title" | "identifier" | "status">>,
+  issues: ReadonlyArray<Pick<Issue, "id" | "companyId" | "title" | "identifier" | "status" | "updatedAt">>,
 ) {
   const issueById = new Map(issues.map((issue) => [issue.id, issue]));
   const current = readRecentTasks(storageKey, companyId);
@@ -112,10 +134,13 @@ export function updateRecentTaskSnapshots(
   const next = current.map((entry) => {
     const issue = issueById.get(entry.id);
     if (!issue || issue.companyId !== companyId) return entry;
+    const activityAt = new Date(issue.updatedAt).getTime();
+    const nextRecordedAt = Number.isFinite(activityAt) ? activityAt : entry.recordedAt;
     if (
       issue.title === entry.title
       && issue.identifier === entry.identifier
       && issue.status === entry.status
+      && nextRecordedAt === entry.recordedAt
     ) return entry;
     changed = true;
     return {
@@ -123,6 +148,7 @@ export function updateRecentTaskSnapshots(
       title: issue.title,
       identifier: issue.identifier,
       status: issue.status,
+      recordedAt: nextRecordedAt,
     };
   });
   if (changed) writeRecentTasks(storageKey, next);

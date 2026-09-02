@@ -99,6 +99,7 @@ describe("SidebarRecentTasks", () => {
       title: "Initial title",
       identifier: "PAP-1",
       status: "todo",
+      updatedAt: new Date(1),
     }, "user-1");
     mockIssuesApi.get.mockResolvedValue({
       id: "issue-1",
@@ -107,6 +108,7 @@ describe("SidebarRecentTasks", () => {
       identifier: "PAP-1",
       status: "in_progress",
       hiddenAt: null,
+      updatedAt: new Date(2),
     });
 
     const queryClient = await render();
@@ -159,6 +161,7 @@ describe("SidebarRecentTasks", () => {
       title: "Hidden task",
       identifier: "PAP-3",
       status: "todo",
+      updatedAt: new Date(3),
     }, "user-1");
     mockIssuesApi.get.mockResolvedValue({
       id: "issue-hidden",
@@ -167,6 +170,7 @@ describe("SidebarRecentTasks", () => {
       identifier: "PAP-3",
       status: "todo",
       hiddenAt: new Date(),
+      updatedAt: new Date(4),
     });
 
     await render();

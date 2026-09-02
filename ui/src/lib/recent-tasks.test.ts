@@ -17,6 +17,7 @@ const issue = (id: string, companyId = "company-1") => ({
   title: `Task ${id}`,
   identifier: `PAP-${id}`,
   status: "todo" as const,
+  updatedAt: new Date(0),
 });
 
 describe("recent task persistence", () => {
@@ -31,13 +32,18 @@ describe("recent task persistence", () => {
     );
   });
 
-  it("deduplicates, moves revisited tasks to the top, and stays bounded", () => {
+  it("deduplicates, only promotes newer activity, and stays bounded", () => {
     for (let index = 0; index < RECENT_TASKS_LIMIT + 2; index += 1) {
       recordRecentTask(issue(String(index)), "user-1", index);
     }
+    recordRecentTask(issue("4"), "user-1", 4);
+
+    let entries = readRecentTasks(getRecentTasksStorageKey("company-1", "user-1"), "company-1");
+    expect(entries[0]?.id).toBe("6");
+
     recordRecentTask(issue("4"), "user-1", 99);
 
-    const entries = readRecentTasks(getRecentTasksStorageKey("company-1", "user-1"), "company-1");
+    entries = readRecentTasks(getRecentTasksStorageKey("company-1", "user-1"), "company-1");
     expect(entries).toHaveLength(RECENT_TASKS_LIMIT);
     expect(entries[0]?.id).toBe("4");
     expect(entries.filter((entry) => entry.id === "4")).toHaveLength(1);
@@ -48,6 +54,9 @@ describe("recent task persistence", () => {
     window.addEventListener(RECENT_TASKS_UPDATED_EVENT, listener);
     recordRecentTask(issue("1"), "user-1");
     expect(listener).toHaveBeenCalledOnce();
+    listener.mockClear();
+    recordRecentTask(issue("1"), "user-1");
+    expect(listener).not.toHaveBeenCalled();
     window.removeEventListener(RECENT_TASKS_UPDATED_EVENT, listener);
   });
 
@@ -60,11 +69,17 @@ describe("recent task persistence", () => {
       ...issue("2"),
       title: "Updated task",
       status: "in_progress",
+      updatedAt: new Date(3),
     }]);
     pruneRecentTasks(storageKey, "company-1", new Set(["1"]));
 
     expect(readRecentTasks(storageKey, "company-1")).toEqual([
-      expect.objectContaining({ id: "2", title: "Updated task", status: "in_progress" }),
+      expect.objectContaining({
+        id: "2",
+        title: "Updated task",
+        status: "in_progress",
+        recordedAt: 3,
+      }),
     ]);
   });
 

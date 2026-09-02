@@ -283,7 +283,7 @@
   --side-panel-tab-edge-fade-width: var(--sz-32px);
   --side-panel-tab-label-max-width: var(--sz-100px);
   --side-panel-tab-label-expanded-max-width: calc(var(--side-panel-tab-label-max-width) + var(--sz-18px));
-  --side-panel-tab-label-fade-width: var(--sz-18px);
+  --side-panel-tab-label-fade-width: var(--sz-32px);
   --side-panel-tab-radius: var(--radius-xl);
   --side-panel-control-radius: var(--radius-xl);
   --side-panel-launcher-width: var(--sz-320px);
@@ -292,7 +292,6 @@
   --streamlined-task-detail-bg: var(--background);
   --side-panel-tab-active-bg: color-mix(in oklab, var(--accent) 88%, var(--background));
   --side-panel-tab-hover-bg: color-mix(in oklab, var(--accent) 58%, transparent);
-  --shadow-task-composer: 0 4px 16px 18px rgb(0 0 0 / 10%);
   --radius-task-composer: 16px;
 
   /* Composer mode-chip hues (v5–v7 decisions): agent + plan reuse the task
@@ -369,7 +368,6 @@
   --sidebar-primary-foreground: oklch(0.985 0 0);
   --sidebar-accent: oklch(0.269 0 0);
   --sidebar-accent-foreground: oklch(0.985 0 0);
-  --shadow-task-composer: 0 4px 16px 18px rgb(0 0 0 / 26%);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
   --chip-match-title-bg: oklch(0.27 0.04 265 / 0.5);
@@ -879,7 +877,9 @@
   transition-duration: var(--motion-side-panel-tab);
   transition-timing-function: var(--motion-ease-standard);
 }
-.side-panel-tab-label-fade {
+.side-panel-tab-label-fade,
+.side-panel-tab-label-close-fade[data-truncated="true"],
+[data-appearance="streamlined-task"]:is(:hover, :focus-within) .side-panel-tab-label-close-fade {
   -webkit-mask-image: linear-gradient(to right, black calc(100% - var(--side-panel-tab-label-fade-width)), transparent);
   mask-image: linear-gradient(to right, black calc(100% - var(--side-panel-tab-label-fade-width)), transparent);
   -webkit-mask-repeat: no-repeat;

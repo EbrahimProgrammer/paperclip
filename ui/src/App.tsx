@@ -143,7 +143,10 @@ function boardRoutes(streamlinedUiEnabled: boolean) {
       <Route index element={<Navigate to="dashboard" replace />} />
       <Route path="dashboard" element={<Dashboard />} />
       <Route path="dashboard/live" element={<DashboardLive />} />
-      <Route path="timeline" element={<Timeline />} />
+      <Route
+        path="timeline"
+        element={streamlinedUiEnabled ? <AuditCompatibilityRedirect to="/activity/timeline" /> : <Timeline />}
+      />
       <Route path="onboarding" element={<OnboardingRoutePage />} />
       <Route path="companies" element={<Companies />} />
       <Route path="company/settings" element={<CompanySettings />} />
@@ -364,11 +367,13 @@ function boardRoutes(streamlinedUiEnabled: boolean) {
           <Route path="activity/runs" element={<AuditHub section="runs" />} />
           <Route path="activity/costs" element={<AuditHub section="costs" />} />
           <Route path="activity/budgets" element={<AuditHub section="budgets" />} />
+          <Route path="activity/timeline" element={<AuditHub section="timeline" />} />
           <Route path="audit" element={<AuditCompatibilityRedirect to="/activity" forceAgentMode />} />
           <Route path="audit/activity" element={<AuditCompatibilityRedirect to="/activity" />} />
           <Route path="audit/runs" element={<AuditCompatibilityRedirect to="/activity/runs" />} />
           <Route path="audit/costs" element={<AuditCompatibilityRedirect to="/activity/costs" />} />
           <Route path="audit/budgets" element={<AuditCompatibilityRedirect to="/activity/budgets" />} />
+          <Route path="audit/timeline" element={<AuditCompatibilityRedirect to="/activity/timeline" />} />
           <Route path="runs" element={<AuditCompatibilityRedirect to="/activity/runs" />} />
           <Route path="costs" element={<AuditCompatibilityRedirect to="/activity/costs" />} />
           <Route path="budgets" element={<AuditCompatibilityRedirect to="/activity/budgets" />} />

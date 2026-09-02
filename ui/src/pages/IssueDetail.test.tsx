@@ -1415,6 +1415,87 @@ describe("IssueDetail", () => {
     ).toBe(false);
   });
 
+  it("keeps hierarchy breadcrumbs and label chips out of the Streamlined task header", async () => {
+    mockIssuesApi.get.mockResolvedValue(
+      createIssue({
+        ancestors: [
+          {
+            id: "parent-1",
+            identifier: "PAP-0",
+            title: "Parent task visible in Properties",
+          },
+        ] as Issue["ancestors"],
+        labels: [
+          {
+            id: "label-1",
+            companyId: "company-1",
+            name: "Quick win",
+            color: "#22c55e",
+            createdAt: new Date("2026-04-21T00:00:00.000Z"),
+            updatedAt: new Date("2026-04-21T00:00:00.000Z"),
+          },
+        ],
+        labelIds: ["label-1"],
+      }),
+    );
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <IssueDetail />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+
+    expect(container.textContent).not.toContain("Parent task visible in Properties");
+    expect(container.textContent).not.toContain("Quick win");
+    expect(container.textContent).toContain("Issue detail smoke");
+  });
+
+  it("preserves hierarchy breadcrumbs and label chips when Streamlined UI is off", async () => {
+    mockInstanceSettingsApi.getExperimental.mockResolvedValue({
+      enableIssuePlanDecompositions: false,
+      enableExperimentalFileViewer: false,
+      enableExternalObjects: false,
+      enableStreamlinedUi: false,
+    });
+    mockIssuesApi.get.mockResolvedValue(
+      createIssue({
+        ancestors: [
+          {
+            id: "parent-1",
+            identifier: "PAP-0",
+            title: "Parent task breadcrumb",
+          },
+        ] as Issue["ancestors"],
+        labels: [
+          {
+            id: "label-1",
+            companyId: "company-1",
+            name: "Legacy label",
+            color: "#22c55e",
+            createdAt: new Date("2026-04-21T00:00:00.000Z"),
+            updatedAt: new Date("2026-04-21T00:00:00.000Z"),
+          },
+        ],
+        labelIds: ["label-1"],
+      }),
+    );
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <IssueDetail />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+
+    expect(container.textContent).toContain("Parent task breadcrumb");
+    expect(container.textContent).toContain("Legacy label");
+  });
+
   it("lifts the redesigned desktop thread into the side-panel header band", async () => {
     mockInstanceSettingsApi.getExperimental.mockResolvedValue({
       enableIssuePlanDecompositions: false,
@@ -1485,15 +1566,18 @@ describe("IssueDetail", () => {
     expect(mockSetPanelVisible).toHaveBeenCalledWith(true);
   });
 
-  it("waits for auth resolution and records a recent task once per user visit", async () => {
+  it("uses task activity for recency and ignores passive revisits", async () => {
     const authRequest = createDeferred<{
       session: { userId: string };
       user: { id: string };
     }>();
-    const issue = createIssue({ title: "Initial recent title", status: "todo" });
+    const issue = createIssue({
+      title: "Initial recent title",
+      status: "todo",
+      updatedAt: new Date(100),
+    });
     mockAuthApi.getSession.mockReturnValue(authRequest.promise);
     mockIssuesApi.get.mockResolvedValue(issue);
-    vi.spyOn(Date, "now").mockReturnValue(100);
 
     await act(async () => {
       root.render(
@@ -1534,12 +1618,12 @@ describe("IssueDetail", () => {
       ]);
     });
 
-    vi.mocked(Date.now).mockReturnValue(200);
     act(() => {
       queryClient.setQueryData(queryKeys.issues.detail("PAP-1"), {
         ...issue,
         title: "Snapshot refresh title",
         status: "in_progress",
+        updatedAt: new Date(200),
       });
     });
     await flushReact();
@@ -1550,9 +1634,9 @@ describe("IssueDetail", () => {
         "company-1",
       )[0],
     ).toMatchObject({
-      title: "Initial recent title",
-      status: "todo",
-      recordedAt: 100,
+      title: "Snapshot refresh title",
+      status: "in_progress",
+      recordedAt: 200,
     });
   });
 
@@ -3102,10 +3186,25 @@ describe("IssueDetail", () => {
     expect(optimisticComment).toMatchObject({ clientStatus: "pending" });
     expect(optimisticComment?.queueState).toBeUndefined();
 
+    const postedAt = new Date("2026-04-21T00:00:10.000Z");
     await act(async () => {
-      postedComment.resolve(createIssueComment({ body: "Fresh comment" }));
+      postedComment.resolve(createIssueComment({
+        body: "Fresh comment",
+        createdAt: postedAt,
+        updatedAt: postedAt,
+      }));
     });
     await flushReact();
+
+    expect(
+      readRecentTasks(
+        getRecentTasksStorageKey("company-1", null),
+        "company-1",
+      )[0],
+    ).toMatchObject({
+      id: "issue-1",
+      recordedAt: postedAt.getTime(),
+    });
   });
 
   it("hides the plan decomposition panel by default", async () => {

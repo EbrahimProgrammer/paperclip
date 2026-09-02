@@ -1,4 +1,4 @@
-export type AuditSection = "activity" | "runs" | "costs" | "budgets";
+export type AuditSection = "activity" | "runs" | "costs" | "budgets" | "timeline";
 
 export const AUDIT_SECTIONS: ReadonlyArray<{
   value: AuditSection;
@@ -9,6 +9,7 @@ export const AUDIT_SECTIONS: ReadonlyArray<{
   { value: "runs", label: "Runs", href: "/activity/runs" },
   { value: "costs", label: "Costs", href: "/activity/costs" },
   { value: "budgets", label: "Budgets", href: "/activity/budgets" },
+  { value: "timeline", label: "Timeline", href: "/activity/timeline" },
 ];
 
 export interface AuditLinkScope {

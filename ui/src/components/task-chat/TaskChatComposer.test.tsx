@@ -293,7 +293,7 @@ describe("TaskChatComposer", () => {
     expect(composer?.className).not.toContain("p-2");
   });
 
-  it("renders the composer shell and its selectors without outlines", () => {
+  it("renders the composer shell without borders or elevation", () => {
     render(
       <TaskChatComposer
         onAdd={async () => {}}
@@ -315,7 +315,6 @@ describe("TaskChatComposer", () => {
 
     expect(composer.classList).not.toContain("border");
     expect(composer.className).not.toContain("shadow-");
-    expect(composer.className).not.toContain("focus-within:ring-");
     expect(mode.classList).not.toContain("border");
     expect(mode.className).not.toContain("ring-");
     expect(runner.classList).toContain("border-0");

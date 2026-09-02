@@ -178,4 +178,55 @@ describe("IssueFiltersPopover", () => {
 
     act(() => root.unmount());
   });
+
+  it("integrates Inbox category and approval status into the filter menu", () => {
+    const root = createRoot(container);
+    const onChange = vi.fn();
+    const onCategoryChange = vi.fn();
+    const onApprovalStatusChange = vi.fn();
+    const onClear = vi.fn();
+
+    act(() => {
+      root.render(
+        <IssueFiltersPopover
+          presentation="streamlined"
+          state={defaultIssueFilterState}
+          onChange={onChange}
+          activeFilterCount={2}
+          enableExternalObjectFilters={false}
+          inboxScopeFilters={{
+            category: "approvals",
+            approvalStatus: "actionable",
+            showApprovalStatus: true,
+            onCategoryChange,
+            onApprovalStatusChange,
+            onClear,
+          }}
+        />,
+      );
+    });
+
+    const categoryOptions = container.querySelector('[data-filter-options="inbox-category"]');
+    const approvalOptions = container.querySelector('[data-filter-options="inbox-approval-status"]');
+    expect(categoryOptions?.textContent).toContain("All categories");
+    expect(categoryOptions?.querySelector('button[aria-pressed="true"]')?.textContent).toContain("Approvals");
+    expect(approvalOptions?.querySelector('button[aria-pressed="true"]')?.textContent).toContain("Needs action");
+
+    const allCategoriesButton = Array.from(categoryOptions?.querySelectorAll("button") ?? [])
+      .find((button) => button.textContent?.includes("All categories"));
+    const resolvedButton = Array.from(approvalOptions?.querySelectorAll("button") ?? [])
+      .find((button) => button.textContent?.includes("Resolved"));
+    act(() => allCategoriesButton?.click());
+    act(() => resolvedButton?.click());
+    expect(onCategoryChange).toHaveBeenCalledWith("everything");
+    expect(onApprovalStatusChange).toHaveBeenCalledWith("resolved");
+
+    const clearButton = Array.from(container.querySelectorAll("button"))
+      .find((button) => button.textContent?.trim() === "Clear");
+    act(() => clearButton?.click());
+    expect(onChange).toHaveBeenCalledWith(defaultIssueFilterState);
+    expect(onClear).toHaveBeenCalledTimes(1);
+
+    act(() => root.unmount());
+  });
 });

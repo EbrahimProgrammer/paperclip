@@ -125,7 +125,7 @@ export function SidePanelTab({
               data-truncated={labelIsTruncated ? "true" : undefined}
               className={cn(
                 appearance === "streamlined-task"
-                  ? "task-detail-pane-tab-label min-w-0 flex-1 overflow-hidden whitespace-nowrap text-center"
+                  ? "side-panel-tab-label-close-fade task-detail-pane-tab-label min-w-0 flex-1 overflow-hidden whitespace-nowrap text-center"
                   : "overflow-hidden whitespace-nowrap",
                 appearance === "default" && (
                   closable && hasStableWidth && !active

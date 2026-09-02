@@ -246,7 +246,7 @@ describe("ProjectDetail", () => {
     });
   });
 
-  it("gives only the project task list a scoped Timeline destination", async () => {
+  it("keeps Timeline out of the project task-list controls", async () => {
     mockLocation.pathname = "/projects/project-1/issues";
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
@@ -263,10 +263,9 @@ describe("ProjectDetail", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
-    expect(mockIssuesList).toHaveBeenCalledWith(expect.objectContaining({
-      projectId: "project-1",
-      projectTimelineHref: "/timeline?projectId=project-1",
-    }));
+    const props = mockIssuesList.mock.calls.at(-1)?.[0];
+    expect(props).toEqual(expect.objectContaining({ projectId: "project-1" }));
+    expect(props).not.toHaveProperty("projectTimelineHref");
   });
 
   describe("plugin detail-tab deep links", () => {

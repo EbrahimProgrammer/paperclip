@@ -680,7 +680,7 @@ export function TaskChatComposer({
     <div
       className={cn(
         streamlined
-          ? "paperclip-task-chat-composer rounded-(--radius-task-composer) bg-muted p-(--sz-18px) shadow-(--shadow-task-composer) transition-shadow focus-within:ring-2 focus-within:ring-ring/15"
+          ? "paperclip-task-chat-composer rounded-(--radius-task-composer) bg-muted p-(--sz-18px) focus-within:ring-2 focus-within:ring-ring/15"
           : "paperclip-task-chat-composer rounded-xl bg-card p-(--sz-18px)",
       )}
       onKeyDownCapture={(e) => {
